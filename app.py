@@ -1,5 +1,6 @@
 # app.py
 import os
+import re
 import threading
 import logging
 import time
@@ -10,7 +11,7 @@ from flask import Flask, render_template, send_file, request, redirect, url_for,
 from googleapiclient.discovery import build
 import psycopg
 from psycopg.rows import dict_row
-from zoneinfo import ZoneInfo  # Python 3.9+
+from zoneinfo import ZoneInfo
 
 # === CONFIG ===
 app = Flask(__name__)
@@ -51,8 +52,10 @@ def get_db():
 def init_db():
     conn = get_db()
     cur = conn.cursor()
+    cur.execute("CREATE SCHEMA IF NOT EXISTS yt_tracker;")
+    cur.execute("SET search_path TO yt_tracker, public;")
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS views (
+        CREATE TABLE IF NOT EXISTS yt_tracker.views (
             video_id TEXT NOT NULL,
             date DATE NOT NULL,
             timestamp TEXT NOT NULL,
@@ -62,13 +65,13 @@ def init_db():
         );
     """)
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS video_list (
+        CREATE TABLE IF NOT EXISTS yt_tracker.video_list (
             video_id TEXT PRIMARY KEY,
             name TEXT,
             is_tracking INTEGER DEFAULT 1
         );
     """)
-    logger.info("Tables ready")
+    logger.info("Database ready")
 
 # === YOUTUBE ===
 def extract_video_id(link):
@@ -83,7 +86,8 @@ def fetch_video_title(vid):
     try:
         resp = youtube.videos().list(part="snippet", id=vid).execute()
         return resp["items"][0]["snippet"]["title"][:100] if resp["items"] else "Unknown"
-    except:
+    except Exception as e:
+        logger.error(f"Title fetch error: {e}")
         return "Unknown"
 
 def fetch_views(ids):
@@ -98,22 +102,22 @@ def fetch_views(ids):
         logger.error(f"API error: {e}")
         return {}
 
-# === BACKGROUND POLLING ===
+# === POLLING ===
 def safe_store(vid, stats):
     cur = get_db().cursor()
     now = datetime.now(IST)
     ts = now.strftime("%Y-%m-%d %H:%M:00")
     date = now.strftime("%Y-%m-%d")
-    cur.execute("DELETE FROM views WHERE video_id=%s AND timestamp=%s", (vid, ts))
+    cur.execute("DELETE FROM yt_tracker.views WHERE video_id=%s AND timestamp=%s", (vid, ts))
     cur.execute("""
-        INSERT INTO views (video_id, date, timestamp, views, likes)
+        INSERT INTO yt_tracker.views (video_id, date, timestamp, views, likes)
         VALUES (%s, %s, %s, %s, %s)
     """, (vid, date, ts, stats["views"], stats["likes"]))
 
 def run_poll():
-    logger.info("RUNNING POLL")
+    logger.info("POLL STARTED")
     cur = get_db().cursor()
-    cur.execute("SELECT video_id FROM video_list WHERE is_tracking=1")
+    cur.execute("SELECT video_id FROM yt_tracker.video_list WHERE is_tracking=1")
     ids = [r["video_id"] for r in cur.fetchall()]
     if not ids:
         logger.info("No videos to track")
@@ -130,7 +134,8 @@ def background_task():
         now = datetime.now(IST)
         seconds_into_5min = (now.minute % 5) * 60 + now.second
         wait = max(1, 300 - seconds_into_5min)
-        logger.info(f"Next poll in {wait}s → { (now + timedelta(seconds=wait)).strftime('%H:%M:%S') }")
+        next_time = (now + timedelta(seconds=wait)).strftime("%H:%M:%S")
+        logger.info(f"Next poll in {wait}s → {next_time}")
         time.sleep(wait)
         try:
             run_poll()
@@ -149,27 +154,30 @@ def start_background():
 # === ROUTES ===
 @app.before_request
 def ensure_background():
-    start_background()  # Restart on every visit
+    start_background()
 
 @app.route("/", methods=["GET", "POST"])
 def index():
     if request.method == "POST":
-        link = request.form.get("video_link", "").strip()
+        link = request.form.get("youtube_url", "").strip()
         if not link:
             flash("Enter YouTube link", "error")
             return redirect(url_for("index"))
+
         vid = extract_video_id(link)
         if not vid:
-            flash("Invalid link", "error")
+            flash("Invalid YouTube link", "error")
             return redirect(url_for("index"))
+
         title = fetch_video_title(vid)
         stats = fetch_views([vid])
         if vid not in stats:
-            flash("Can't fetch stats", "error")
+            flash("Can't fetch video (private/deleted?)", "error")
             return redirect(url_for("index"))
+
         cur = get_db().cursor()
         cur.execute("""
-            INSERT INTO video_list (video_id, name, is_tracking)
+            INSERT INTO yt_tracker.video_list (video_id, name, is_tracking)
             VALUES (%s, %s, 1)
             ON CONFLICT (video_id) DO UPDATE SET name=%s, is_tracking=1
         """, (vid, title, title))
@@ -177,18 +185,18 @@ def index():
         flash(f"Added: {title}", "success")
         return redirect(url_for("index"))
 
-    # GET
+    # GET: Dashboard
     videos = []
     cur = get_db().cursor()
-    cur.execute("SELECT video_id, name, is_tracking FROM video_list ORDER BY name")
+    cur.execute("SELECT video_id, name, is_tracking FROM yt_tracker.video_list ORDER BY name")
     for row in cur.fetchall():
         vid = row["video_id"]
-        cur.execute("SELECT DISTINCT date FROM views WHERE video_id=%s ORDER BY date DESC", (vid,))
+        cur.execute("SELECT DISTINCT date FROM yt_tracker.views WHERE video_id=%s ORDER BY date DESC", (vid,))
         dates = [r["date"] for r in cur.fetchall()]
         daily = {}
         for d in dates:
             cur.execute("""
-                SELECT timestamp, views FROM views
+                SELECT timestamp, views FROM yt_tracker.views
                 WHERE video_id=%s AND date=%s
                 ORDER BY timestamp
             """, (vid, d))
@@ -202,13 +210,18 @@ def index():
                 ts_dt = datetime.strptime(r["timestamp"], "%Y-%m-%d %H:%M:%S")
                 one_ago = (ts_dt - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
                 cur.execute("""
-                    SELECT views FROM views WHERE video_id=%s AND timestamp <= %s
+                    SELECT views FROM yt_tracker.views WHERE video_id=%s AND timestamp <= %s
                     ORDER BY timestamp DESC LIMIT 1
                 """, (vid, one_ago))
                 prev = cur.fetchone()
                 if prev:
                     hourly = r["views"] - prev["views"]
-                processed.append((r["timestamp"][11:16], f"{r['views']:,}", f"+{gain:,}" if gain > 0 else "0", f"+{hourly:,}/hr"))
+                processed.append((
+                    r["timestamp"][11:16],
+                    f"{r['views']:,}",
+                    f"+{gain:,}" if gain > 0 else "0",
+                    f"+{hourly:,}/hr"
+                ))
             daily[d] = processed
         videos.append({
             "video_id": vid,
@@ -221,29 +234,29 @@ def index():
 @app.route("/toggle/<video_id>")
 def toggle(video_id):
     cur = get_db().cursor()
-    cur.execute("SELECT is_tracking FROM video_list WHERE video_id=%s", (video_id,))
+    cur.execute("SELECT is_tracking FROM yt_tracker.video_list WHERE video_id=%s", (video_id,))
     current = cur.fetchone()["is_tracking"]
-    cur.execute("UPDATE video_list SET is_tracking=%s WHERE video_id=%s", (0 if current else 1, video_id))
+    cur.execute("UPDATE yt_tracker.video_list SET is_tracking=%s WHERE video_id=%s", (0 if current else 1, video_id))
     flash("Paused" if current else "Resumed")
     return redirect(url_for("index"))
 
 @app.route("/remove/<video_id>")
 def remove(video_id):
     cur = get_db().cursor()
-    cur.execute("DELETE FROM views WHERE video_id=%s", (video_id,))
-    cur.execute("DELETE FROM video_list WHERE video_id=%s", (video_id,))
+    cur.execute("DELETE FROM yt_tracker.views WHERE video_id=%s", (video_id,))
+    cur.execute("DELETE FROM yt_tracker.video_list WHERE video_id=%s", (video_id,))
     flash("Removed")
     return redirect(url_for("index"))
 
 @app.route("/export/<video_id>")
 def export(video_id):
     cur = get_db().cursor()
-    cur.execute("SELECT name FROM video_list WHERE video_id=%s", (video_id,))
+    cur.execute("SELECT name FROM yt_tracker.video_list WHERE video_id=%s", (video_id,))
     name = cur.fetchone()["name"]
-    cur.execute("SELECT timestamp, views FROM views WHERE video_id=%s ORDER BY timestamp", (video_id,))
-    df = pd.DataFrame([{"Time": r["timestamp"], "Views": r["views"]} for r in cur.fetchall()])
+    cur.execute("SELECT timestamp, views FROM yt_tracker.views WHERE video_id=%s ORDER BY timestamp", (video_id,))
+    df = pd.DataFrame([{"Time (IST)": r["timestamp"], "Views": r["views"]} for r in cur.fetchall()])
     fname = "export.xlsx"
-    df.to_excel(fname, index=False)
+    df.to_excel(fname, index=False, engine="openpyxl")
     return send_file(fname, as_attachment=True, download_name=f"{name}_views.xlsx")
 
 @app.route("/ping")
