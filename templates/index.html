@@ -6,30 +6,57 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <!-- Bootstrap (CDN) -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <!-- Chart.js (CDN) -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
   <style>
-    body { background: #0b0f19; color: #e8ebf0; }
-    .card { background:#12182a; border:1px solid #233; }
-    .nav-pills .nav-link.active { background:#2a375b; }
-    .gain-pos { color:#53d769; }
-    .gain-neg { color:#ff3b30; }
-    .gain-null { color:#aab1c3; }
-    .muted { color:#aab1c3; }
-    a, .btn-link { color:#7ab7ff; }
-    .table thead th { color:#aab1c3; }
-    .table { color:#e8ebf0; }
-    .form-control, .form-select { background:#0f1425; border-color:#233; color:#e8ebf0; }
-    .btn-primary { background:#2a66ff; border-color:#2a66ff; }
-    .badge.paused { background:#6c757d; }
-    canvas { max-height: 260px; }
+    :root{
+      --bg: #ffffff;
+      --text: #0b0b0b;          /* dark black for text */
+      --muted: #5a6570;         /* subtle gray */
+      --border: #e9edf3;        /* faint blue-ish border */
+      --primary: #2a66ff;       /* faint blue accent for primary */
+      --green: #18a957;         /* green for positive gains */
+      --red: #d23b3b;           /* red for negative */
+      --pill: #eef4ff;          /* light blue pill bg */
+      --pill-active: #dfe9ff;   /* slightly darker when active */
+      --card: #ffffff;          /* white cards */
+      --hover: #f7f9fc;         /* light hover */
+    }
+    body { background: var(--bg); color: var(--text); }
+    .container { max-width: 1100px; }
+    .muted { color: var(--muted); }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 14px; }
+    .card .card-body { padding: 1.1rem 1.2rem; }
+    .btn-primary { background: var(--primary); border-color: var(--primary); }
+    .btn-outline-warning { color: #bf7b00; border-color: #ffd8a8; }
+    .btn-outline-warning:hover { background:#fff3e0; }
+    .btn-outline-danger { color:#b61e1e; border-color:#ffd6d6; }
+    .btn-outline-danger:hover { background:#fff0f0; }
+    .btn-outline-light { color:#1f3e7a; border-color: var(--border); }
+    .btn-outline-light:hover { background: var(--hover); }
+
+    .badge.paused { background: #adb5bd; }
+    .nav-pills .nav-link { background: var(--pill); color: #173b7a; border: 1px solid var(--border); margin-right: .5rem; }
+    .nav-pills .nav-link.active { background: var(--pill-active); color: #0f2c64; }
+
+    .table thead th { color: var(--muted); border-bottom-color: var(--border); }
+    .table tbody tr:hover { background: var(--hover); }
+    .table { color: var(--text); }
+    .gain-pos { color: var(--green); font-weight: 600; }
+    .gain-neg { color: var(--red); font-weight: 600; }
+    .gain-null { color: var(--muted); }
+    a, .btn-link { color: #1f4fd6; }
+
+    /* small niceties */
+    .pillwrap { overflow-x:auto; white-space:nowrap; }
+    .tools .btn { height: 36px; }
+    .title-row h4 { font-size: 1.05rem; }
   </style>
 </head>
 <body>
 <div class="container py-4">
 
-  <h1 class="mb-3">📈 YouTube Views Tracker</h1>
-  <p class="muted">All times in IST (Asia/Kolkata). Sampler runs every 5 minutes aligned to 00, 05, 10, ...</p>
+  <h1 class="mb-1">📈 YouTube Views Tracker</h1>
+  <p class="muted mb-4">All times in IST (Asia/Kolkata). Sampled every 5 minutes (00, 05, 10, ...).</p>
 
   <!-- Alerts -->
   {% with messages = get_flashed_messages(with_categories=true) %}
@@ -59,7 +86,6 @@
     </div>
   </div>
 
-  <!-- Video Cards -->
   {% if videos|length == 0 %}
     <p class="muted">No videos yet. Add a link above to begin.</p>
   {% endif %}
@@ -69,14 +95,14 @@
     <div class="col-12">
       <div class="card">
         <div class="card-body">
-          <div class="d-flex align-items-center justify-content-between flex-wrap">
+          <div class="title-row d-flex align-items-center justify-content-between flex-wrap">
             <h4 class="mb-2">
               {{ v.name }}
               {% if not v.is_tracking %}
                 <span class="badge paused ms-2">Paused</span>
               {% endif %}
             </h4>
-            <div class="mb-2 d-flex gap-2">
+            <div class="tools mb-2 d-flex gap-2">
               <a class="btn btn-sm btn-outline-light" href="{{ url_for('export_video', video_id=v.video_id) }}">Export to Excel</a>
               <a class="btn btn-sm btn-outline-warning" href="{{ url_for('stop_tracking', video_id=v.video_id) }}">
                 {% if v.is_tracking %}Pause{% else %}Resume{% endif %}
@@ -89,107 +115,62 @@
             <p class="muted mb-0">No samples yet. First snapshot will appear after the next 5-minute tick.</p>
           {% else %}
             <!-- Day Tabs -->
-            <ul class="nav nav-pills mb-3" id="pills-{{ v.video_id }}" role="tablist">
-              {% set first = True %}
-              {% for d, rows in v.daily_data.items() %}
-                <li class="nav-item" role="presentation">
-                  <button class="nav-link {% if first %}active{% endif %}" id="tab-{{ v.video_id }}-{{ loop.index }}"
-                          data-bs-toggle="pill" data-bs-target="#pane-{{ v.video_id }}-{{ loop.index }}"
-                          type="button" role="tab" aria-controls="pane-{{ v.video_id }}-{{ loop.index }}"
-                          aria-selected="{{ 'true' if first else 'false' }}">
-                    {{ d }}
-                  </button>
-                </li>
-                {% set first = False %}
-              {% endfor %}
-            </ul>
+            <div class="pillwrap">
+              <ul class="nav nav-pills mb-3" id="pills-{{ v.video_id }}" role="tablist" style="display:inline-flex;">
+                {% set first = True %}
+                {% for d, rows in v.daily_data.items() %}
+                  <li class="nav-item" role="presentation">
+                    <button class="nav-link {% if first %}active{% endif %}" id="tab-{{ v.video_id }}-{{ loop.index }}"
+                            data-bs-toggle="pill" data-bs-target="#pane-{{ v.video_id }}-{{ loop.index }}"
+                            type="button" role="tab" aria-controls="pane-{{ v.video_id }}-{{ loop.index }}"
+                            aria-selected="{{ 'true' if first else 'false' }}">
+                      {{ d }}
+                    </button>
+                  </li>
+                  {% set first = False %}
+                {% endfor %}
+              </ul>
+            </div>
 
             <div class="tab-content" id="pills-content-{{ v.video_id }}">
               {% set first = True %}
               {% for d, rows in v.daily_data.items() %}
                 <div class="tab-pane fade {% if first %}show active{% endif %}" id="pane-{{ v.video_id }}-{{ loop.index }}" role="tabpanel">
-                  <div class="row g-3">
-                    <div class="col-12 col-lg-6">
-                      <canvas id="chart-views-{{ v.video_id }}-{{ loop.index }}"></canvas>
-                    </div>
-                    <div class="col-12 col-lg-6">
-                      <canvas id="chart-gains-{{ v.video_id }}-{{ loop.index }}"></canvas>
-                    </div>
-                    <div class="col-12">
-                      <div class="table-responsive">
-                        <table class="table table-sm align-middle">
-                          <thead>
-                            <tr>
-                              <th>Time (IST)</th>
-                              <th>Total Views</th>
-                              <th>Gain (5 min)</th>
-                              <th>Hourly Growth</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {% for ts, views, gain, hourly in rows %}
-                              <tr>
-                                <td class="muted">{{ ts }}</td>
-                                <td>{{ "{:,}".format(views) }}</td>
-                                <td>
-                                  {% if gain is none %}
-                                    <span class="gain-null">—</span>
-                                  {% else %}
-                                    <span class="{{ 'gain-pos' if gain>=0 else 'gain-neg' }}">{{ '+' if gain>=0 else '' }}{{ "{:,}".format(gain) }}</span>
-                                  {% endif %}
-                                </td>
-                                <td>
-                                  {% if hourly is none %}
-                                    <span class="gain-null">—</span>
-                                  {% else %}
-                                    <span class="{{ 'gain-pos' if hourly>=0 else 'gain-neg' }}">{{ '+' if hourly>=0 else '' }}{{ "{:,}".format(hourly) }}</span>
-                                  {% endif %}
-                                </td>
-                              </tr>
-                            {% endfor %}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
+                  <div class="table-responsive">
+                    <table class="table table-sm align-middle">
+                      <thead>
+                        <tr>
+                          <th>Time (IST)</th>
+                          <th>Total Views</th>
+                          <th>Gain (5 min)</th>
+                          <th>Hourly Growth</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {# Newest first: reverse the processed list #}
+                        {% for ts, views, gain, hourly in rows|reverse %}
+                          <tr>
+                            <td class="muted">{{ ts }}</td>
+                            <td>{{ "{:,}".format(views) }}</td>
+                            <td>
+                              {% if gain is none %}
+                                <span class="gain-null">—</span>
+                              {% else %}
+                                <span class="{{ 'gain-pos' if gain>=0 else 'gain-neg' }}">{{ '+' if gain>=0 else '' }}{{ "{:,}".format(gain) }}</span>
+                              {% endif %}
+                            </td>
+                            <td>
+                              {% if hourly is none %}
+                                <span class="gain-null">—</span>
+                              {% else %}
+                                <span class="{{ 'gain-pos' if hourly>=0 else 'gain-neg' }}">{{ '+' if hourly>=0 else '' }}{{ "{:,}".format(hourly) }}</span>
+                              {% endif %}
+                            </td>
+                          </tr>
+                        {% endfor %}
+                      </tbody>
+                    </table>
                   </div>
-
-                  <script>
-                    (function(){
-                      const labels = {{ rows|map(attribute=0)|list|tojson }};
-                      const views  = {{ rows|map(attribute=1)|list|tojson }};
-                      const gains  = {{ rows|map(attribute=2)|list|tojson }};
-                      const hourly = {{ rows|map(attribute=3)|list|tojson }};
-
-                      new Chart(document.getElementById('chart-views-{{ v.video_id }}-{{ loop.index }}'), {
-                        type: 'line',
-                        data: {
-                          labels: labels,
-                          datasets: [{ label: 'Total Views', data: views, tension: 0.25 }]
-                        },
-                        options: {
-                          responsive: true,
-                          scales: { x: { ticks: { color: '#aab1c3' } }, y: { ticks: { color: '#aab1c3' } } },
-                          plugins: { legend: { labels: { color: '#e8ebf0' } } }
-                        }
-                      });
-
-                      new Chart(document.getElementById('chart-gains-{{ v.video_id }}-{{ loop.index }}'), {
-                        type: 'bar',
-                        data: {
-                          labels: labels,
-                          datasets: [
-                            { label: 'Gain (5 min)', data: gains, },
-                            { label: 'Hourly Growth', data: hourly, }
-                          ]
-                        },
-                        options: {
-                          responsive: true,
-                          scales: { x: { ticks: { color: '#aab1c3' } }, y: { ticks: { color: '#aab1c3' } } },
-                          plugins: { legend: { labels: { color: '#e8ebf0' } } }
-                        }
-                      });
-                    })();
-                  </script>
                 </div>
                 {% set first = False %}
               {% endfor %}
