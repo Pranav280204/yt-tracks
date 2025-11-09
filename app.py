@@ -83,7 +83,6 @@ ALTER TABLE views
 
 -- Helpful indexes
 CREATE INDEX IF NOT EXISTS idx_views_vid_ts ON views(video_id, ts);
-CREATE INDEX IF NOT EXISTS idx_views_day ON views(day);
 """
 
 def init_db():
