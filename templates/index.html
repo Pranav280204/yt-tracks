@@ -1,172 +1,211 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
+  <meta charset="utf-8">
   <title>YouTube Views Tracker</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <!-- Minimal, dependency-free styling -->
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Bootstrap (CDN) -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <!-- Chart.js (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <style>
-    :root { --bg:#0b1020; --panel:#111936; --muted:#99a3b3; --text:#e9eef8; --accent:#7aa2ff; --ok:#38c172; --warn:#f2a900; --err:#e5534b; }
-    * { box-sizing: border-box; }
-    body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: var(--bg); color: var(--text); }
-    header { padding: 20px; border-bottom: 1px solid #1e2a4a; display:flex; align-items:center; gap:16px; }
-    h1 { margin:0; font-size: 20px; letter-spacing:0.3px; }
-    main { padding: 20px; max-width: 1100px; margin: 0 auto; }
-    .card { background: var(--panel); border:1px solid #1e2a4a; border-radius: 14px; padding: 16px; margin-bottom: 18px; }
-    .row { display:flex; gap:12px; flex-wrap: wrap; }
-    input[type=text] { width:100%; padding:10px 12px; border-radius: 10px; border:1px solid #2b3b66; background:#0d1430; color:var(--text); }
-    button, .btn { cursor:pointer; border:none; border-radius: 10px; padding:10px 14px; background:#1b2a57; color:var(--text); }
-    button:hover, .btn:hover { background:#23356b; }
-    .btn-ok { background: #17452a; } .btn-ok:hover { background:#1c5632; }
-    .btn-warn { background: #5c3c07; } .btn-warn:hover { background:#754e0b; }
-    .btn-err { background: #5a1c18; } .btn-err:hover { background:#7a271f; }
-    .muted { color: var(--muted); font-size: 12px; }
-    .pill { font-size:12px; padding:4px 8px; border-radius: 999px; border: 1px solid #2b3b66; background:#0d1430; }
-    table { width:100%; border-collapse: collapse; margin-top: 8px; }
-    th, td { text-align:left; padding:8px 10px; border-bottom:1px solid #1e2a4a; font-size: 13px; }
-    th { color:#c9d4ee; }
-    .tabs { display:flex; gap:8px; flex-wrap: wrap; margin-top: 8px; }
-    .tab { padding:6px 10px; border-radius: 999px; border:1px solid #2b3b66; background:#0d1430; cursor:pointer; font-size: 12px; }
-    .tab.active { background: #15224a; border-color:#3a58a6; color:#cfe0ff; }
-    .flash { padding:10px 12px; border-radius: 10px; margin-bottom:14px; }
-    .flash.success { background:#0f2e21; } .flash.info { background:#0f2437; } .flash.error { background:#3a1010; } .flash.warning { background:#31240c; }
-    .grid { display:grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items:center; }
-    .video-title { font-weight:600; }
-    .actions { display:flex; gap:8px; }
-    .empty { color: var(--muted); padding: 14px 0 4px; }
-    .sticky-head { position: sticky; top: 0; background: var(--panel); }
+    body { background: #0b0f19; color: #e8ebf0; }
+    .card { background:#12182a; border:1px solid #233; }
+    .nav-pills .nav-link.active { background:#2a375b; }
+    .gain-pos { color:#53d769; }
+    .gain-neg { color:#ff3b30; }
+    .gain-null { color:#aab1c3; }
+    .muted { color:#aab1c3; }
+    a, .btn-link { color:#7ab7ff; }
+    .table thead th { color:#aab1c3; }
+    .table { color:#e8ebf0; }
+    .form-control, .form-select { background:#0f1425; border-color:#233; color:#e8ebf0; }
+    .btn-primary { background:#2a66ff; border-color:#2a66ff; }
+    .badge.paused { background:#6c757d; }
+    canvas { max-height: 260px; }
   </style>
 </head>
 <body>
-<header>
-  <h1>📈 YouTube Views Tracker</h1>
-  <span class="pill">Every 5 min · IST aligned</span>
-</header>
+<div class="container py-4">
 
-<main>
-  <!-- Flash messages -->
+  <h1 class="mb-3">📈 YouTube Views Tracker</h1>
+  <p class="muted">All times in IST (Asia/Kolkata). Sampler runs every 5 minutes aligned to 00, 05, 10, ...</p>
+
+  <!-- Alerts -->
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
-      {% for category, message in messages %}
-        <div class="flash {{ category }}">{{ message }}</div>
-      {% endfor %}
+      <div class="mt-2">
+        {% for category, message in messages %}
+          <div class="alert alert-{{ 'secondary' if category=='info' else category }} alert-dismissible fade show" role="alert">
+            {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+          </div>
+        {% endfor %}
+      </div>
     {% endif %}
   {% endwith %}
 
-  <!-- Add video -->
-  <div class="card">
-    <form method="post" action="{{ url_for('add_video') }}">
-      <div class="row">
-        <div style="flex:1 1 520px">
-          <label class="muted">Paste YouTube URL or ID</label>
-          <input type="text" name="url" placeholder="https://www.youtube.com/watch?v=dQw4w9WgXcQ" required />
+  <!-- Add Video -->
+  <div class="card mb-4">
+    <div class="card-body">
+      <form class="row g-2" method="POST" action="{{ url_for('add_video') }}">
+        <div class="col-12 col-md-9">
+          <input class="form-control" type="url" name="link" placeholder="Paste any YouTube link (youtube.com or youtu.be)" required>
         </div>
-        <div style="align-self:flex-end">
-          <button class="btn-ok" type="submit">Add & Start Tracking</button>
+        <div class="col-12 col-md-3 d-grid">
+          <button class="btn btn-primary" type="submit">Add & Start Tracking</button>
         </div>
-      </div>
-    </form>
+      </form>
+    </div>
   </div>
 
-  <!-- Videos list -->
+  <!-- Video Cards -->
   {% if videos|length == 0 %}
-    <div class="card empty">No videos yet. Paste a YouTube link above to start tracking!</div>
-  {% else %}
-    {% for vid, v in videos.items() %}
-      <div class="card">
-        <div class="grid">
-          <div class="video-title">{{ v.title }}</div>
-          <div class="muted">ID: {{ v.video_id }}</div>
-          <div class="muted">Created: {{ v.created_at }} IST</div>
-          <div class="actions">
-            {% if v.active %}
-              <form method="post" action="{{ url_for('pause_video', video_id=v.video_id) }}" style="display:inline">
-                <button type="submit">Pause</button>
-              </form>
-            {% else %}
-              <form method="post" action="{{ url_for('resume_video', video_id=v.video_id) }}" style="display:inline">
-                <button class="btn-ok" type="submit">Resume</button>
-              </form>
-            {% endif %}
-            <a class="btn" href="{{ url_for('export_excel', video_id=v.video_id) }}">Export .xlsx</a>
-            <form method="post" action="{{ url_for('remove_video', video_id=v.video_id) }}" style="display:inline" onsubmit="return confirm('Delete this video and all history?');">
-              <button class="btn-err" type="submit">Remove</button>
-            </form>
-          </div>
-        </div>
-
-        <!-- Daily tabs -->
-        {% set days = v.per_day.keys()|list|sort %}
-        {% if days|length == 0 %}
-          <div class="empty">No snapshots yet. First poll happens on the next 5-minute boundary (00/05/10...).</div>
-        {% else %}
-          <div class="tabs" data-tabs-for="{{ v.video_id }}">
-            {% for d in days %}
-              <div class="tab {% if loop.last %}active{% endif %}" data-day="{{ d }}">{{ d }}</div>
-            {% endfor %}
-          </div>
-
-          {% for d in days %}
-            <div class="day-table" data-for="{{ v.video_id }}" data-day="{{ d }}" style="display: {{ 'block' if loop.last else 'none' }};">
-              <table>
-                <thead class="sticky-head">
-                  <tr>
-                    <th style="width:190px">Time (IST)</th>
-                    <th>Total Views</th>
-                    <th>Gain (last 5 min)</th>
-                    <th>Growth (last 60 min)</th>
-                    <th>Likes</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {% for row in v.per_day[d] %}
-                    <tr>
-                      <td>{{ row.ts }}</td>
-                      <td>{{ "{:,}".format(row.views) }}</td>
-                      <td>
-                        {% if row.gain5 is not none %}
-                          <span style="color: {{ '#79d29c' if row.gain5 >= 0 else '#e5534b' }};">
-                            {{ "+" if row.gain5 >= 0 else "" }}{{ "{:,}".format(row.gain5) }}
-                          </span>
-                        {% else %}—{% endif %}
-                      </td>
-                      <td>
-                        {% if row.growth60 is not none %}
-                          <span style="color: {{ '#79d29c' if row.growth60 >= 0 else '#e5534b' }};">
-                            {{ "+" if row.growth60 >= 0 else "" }}{{ "{:,}".format(row.growth60) }}
-                          </span>
-                        {% else %}—{% endif %}
-                      </td>
-                      <td>{{ row.likes if row.likes is not none else "—" }}</td>
-                    </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </div>
-          {% endfor %}
-        {% endif %}
-      </div>
-    {% endfor %}
+    <p class="muted">No videos yet. Add a link above to begin.</p>
   {% endif %}
-</main>
 
-<script>
-  // Simple tab switcher per video
-  document.querySelectorAll(".tabs").forEach(tabs => {
-    const vid = tabs.getAttribute("data-tabs-for");
-    tabs.addEventListener("click", (e) => {
-      const tab = e.target.closest(".tab");
-      if (!tab) return;
-      const day = tab.getAttribute("data-day");
-      // toggle active tab
-      tabs.querySelectorAll(".tab").forEach(t => t.classList.remove("active"));
-      tab.classList.add("active");
-      // show corresponding table
-      document.querySelectorAll(`.day-table[data-for="${vid}"]`).forEach(div => {
-        div.style.display = (div.getAttribute("data-day") === day) ? "block" : "none";
-      });
-    });
-  });
-</script>
+  <div class="row g-3">
+  {% for v in videos %}
+    <div class="col-12">
+      <div class="card">
+        <div class="card-body">
+          <div class="d-flex align-items-center justify-content-between flex-wrap">
+            <h4 class="mb-2">
+              {{ v.name }}
+              {% if not v.is_tracking %}
+                <span class="badge paused ms-2">Paused</span>
+              {% endif %}
+            </h4>
+            <div class="mb-2 d-flex gap-2">
+              <a class="btn btn-sm btn-outline-light" href="{{ url_for('export_video', video_id=v.video_id) }}">Export to Excel</a>
+              <a class="btn btn-sm btn-outline-warning" href="{{ url_for('stop_tracking', video_id=v.video_id) }}">
+                {% if v.is_tracking %}Pause{% else %}Resume{% endif %}
+              </a>
+              <a class="btn btn-sm btn-outline-danger" href="{{ url_for('remove_video', video_id=v.video_id) }}" onclick="return confirm('Delete this video and ALL its data?')">Remove</a>
+            </div>
+          </div>
+
+          {% if v.daily_data|length == 0 %}
+            <p class="muted mb-0">No samples yet. First snapshot will appear after the next 5-minute tick.</p>
+          {% else %}
+            <!-- Day Tabs -->
+            <ul class="nav nav-pills mb-3" id="pills-{{ v.video_id }}" role="tablist">
+              {% set first = True %}
+              {% for d, rows in v.daily_data.items() %}
+                <li class="nav-item" role="presentation">
+                  <button class="nav-link {% if first %}active{% endif %}" id="tab-{{ v.video_id }}-{{ loop.index }}"
+                          data-bs-toggle="pill" data-bs-target="#pane-{{ v.video_id }}-{{ loop.index }}"
+                          type="button" role="tab" aria-controls="pane-{{ v.video_id }}-{{ loop.index }}"
+                          aria-selected="{{ 'true' if first else 'false' }}">
+                    {{ d }}
+                  </button>
+                </li>
+                {% set first = False %}
+              {% endfor %}
+            </ul>
+
+            <div class="tab-content" id="pills-content-{{ v.video_id }}">
+              {% set first = True %}
+              {% for d, rows in v.daily_data.items() %}
+                <div class="tab-pane fade {% if first %}show active{% endif %}" id="pane-{{ v.video_id }}-{{ loop.index }}" role="tabpanel">
+                  <div class="row g-3">
+                    <div class="col-12 col-lg-6">
+                      <canvas id="chart-views-{{ v.video_id }}-{{ loop.index }}"></canvas>
+                    </div>
+                    <div class="col-12 col-lg-6">
+                      <canvas id="chart-gains-{{ v.video_id }}-{{ loop.index }}"></canvas>
+                    </div>
+                    <div class="col-12">
+                      <div class="table-responsive">
+                        <table class="table table-sm align-middle">
+                          <thead>
+                            <tr>
+                              <th>Time (IST)</th>
+                              <th>Total Views</th>
+                              <th>Gain (5 min)</th>
+                              <th>Hourly Growth</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {% for ts, views, gain, hourly in rows %}
+                              <tr>
+                                <td class="muted">{{ ts }}</td>
+                                <td>{{ "{:,}".format(views) }}</td>
+                                <td>
+                                  {% if gain is none %}
+                                    <span class="gain-null">—</span>
+                                  {% else %}
+                                    <span class="{{ 'gain-pos' if gain>=0 else 'gain-neg' }}">{{ '+' if gain>=0 else '' }}{{ "{:,}".format(gain) }}</span>
+                                  {% endif %}
+                                </td>
+                                <td>
+                                  {% if hourly is none %}
+                                    <span class="gain-null">—</span>
+                                  {% else %}
+                                    <span class="{{ 'gain-pos' if hourly>=0 else 'gain-neg' }}">{{ '+' if hourly>=0 else '' }}{{ "{:,}".format(hourly) }}</span>
+                                  {% endif %}
+                                </td>
+                              </tr>
+                            {% endfor %}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </div>
+
+                  <script>
+                    (function(){
+                      const labels = {{ rows|map(attribute=0)|list|tojson }};
+                      const views  = {{ rows|map(attribute=1)|list|tojson }};
+                      const gains  = {{ rows|map(attribute=2)|list|tojson }};
+                      const hourly = {{ rows|map(attribute=3)|list|tojson }};
+
+                      new Chart(document.getElementById('chart-views-{{ v.video_id }}-{{ loop.index }}'), {
+                        type: 'line',
+                        data: {
+                          labels: labels,
+                          datasets: [{ label: 'Total Views', data: views, tension: 0.25 }]
+                        },
+                        options: {
+                          responsive: true,
+                          scales: { x: { ticks: { color: '#aab1c3' } }, y: { ticks: { color: '#aab1c3' } } },
+                          plugins: { legend: { labels: { color: '#e8ebf0' } } }
+                        }
+                      });
+
+                      new Chart(document.getElementById('chart-gains-{{ v.video_id }}-{{ loop.index }}'), {
+                        type: 'bar',
+                        data: {
+                          labels: labels,
+                          datasets: [
+                            { label: 'Gain (5 min)', data: gains, },
+                            { label: 'Hourly Growth', data: hourly, }
+                          ]
+                        },
+                        options: {
+                          responsive: true,
+                          scales: { x: { ticks: { color: '#aab1c3' } }, y: { ticks: { color: '#aab1c3' } } },
+                          plugins: { legend: { labels: { color: '#e8ebf0' } } }
+                        }
+                      });
+                    })();
+                  </script>
+                </div>
+                {% set first = False %}
+              {% endfor %}
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  {% endfor %}
+  </div>
+
+  <footer class="mt-4 mb-3 text-center muted">
+    Runs every 5 minutes • Stored in PostgreSQL • Export as .xlsx
+  </footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
