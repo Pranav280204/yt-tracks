@@ -50,33 +50,6 @@ except ModuleNotFoundError:
     pool = _MiniPool(DATABASE_URL)
     app.logger.warning("psycopg_pool not found; using fallback mini-pool")
 
-# ---------------------- Time helpers ----------------------
-def seconds_to_next_5min_boundary_IST(now_utc: datetime | None = None) -> float:
-    if now_utc is None:
-        now_utc = datetime.now(timezone.utc)
-    now_ist = now_utc.astimezone(IST)
-    minute = now_ist.minute
-    if minute % 5 == 0 and now_ist.second < 3:
-        return 0.0
-    next_block_min = (minute // 5 + 1) * 5
-    if next_block_min >= 60:
-        target = now_ist.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
-    else:
-        target = now_ist.replace(minute=next_block_min, second=0, microsecond=0)
-    return max((target - now_ist).total_seconds(), 0.0)
-
-def ist_slot_to_utc(now_utc: datetime | None = None) -> datetime:
-    """
-    Return the start of the current 5-minute slot in IST as a UTC timestamptz (sec=0).
-    Example: IST 01:02 -> 01:00 IST -> converted to UTC.
-    """
-    if now_utc is None:
-        now_utc = datetime.now(timezone.utc)
-    now_ist = now_utc.astimezone(IST)
-    floored_min = (now_ist.minute // 5) * 5
-    slot_ist = now_ist.replace(minute=floored_min, second=0, microsecond=0)
-    return slot_ist.astimezone(timezone.utc).replace(tzinfo=timezone.utc)
-
 # ---------------------- DB Bootstrap (migration-safe) ----------------------
 SCHEMA_SQL = """
 -- Ensure base table exists so we can ALTER safely
@@ -114,24 +87,26 @@ ALTER TABLE views
 -- === Legacy column cleanup/migration ===
 DO $$
 BEGIN
-    -- If old 'timestamp' column exists:
+    -- If old 'timestamp' column exists, migrate it to 'ts'
     IF EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_schema = 'public' AND table_name = 'views' AND column_name = 'timestamp'
     ) THEN
-        -- If ts doesn't exist, rename legacy column to ts (no casting)
-        IF NOT EXISTS (
+        IF EXISTS (
             SELECT 1 FROM information_schema.columns
             WHERE table_schema = 'public' AND table_name = 'views' AND column_name = 'ts'
         ) THEN
-            EXECUTE 'ALTER TABLE public.views RENAME COLUMN "timestamp" TO ts';
-        ELSE
-            -- ts already exists -> drop legacy column to avoid NOT NULL conflicts
+            -- copy data from legacy "timestamp" into ts when ts is NULL
+            EXECUTE 'UPDATE public.views SET ts = COALESCE(ts, "timestamp")';
+            -- drop legacy column
             EXECUTE 'ALTER TABLE public.views DROP COLUMN "timestamp"';
+        ELSE
+            -- just rename the legacy column to ts (keeps NOT NULL and index attrs)
+            EXECUTE 'ALTER TABLE public.views RENAME COLUMN "timestamp" TO ts';
         END IF;
     END IF;
 
-    -- Drop older auxiliary date/day if present
+    -- Drop older auxiliary date columns if present
     IF EXISTS (
         SELECT 1 FROM information_schema.columns
         WHERE table_schema = 'public' AND table_name = 'views' AND column_name = 'date'
@@ -147,7 +122,7 @@ BEGIN
     END IF;
 END $$;
 
--- Helpful non-unique index (unique added after dedup in app code)
+-- Helpful index for queries
 CREATE INDEX IF NOT EXISTS idx_views_vid_ts ON views(video_id, ts);
 """
 
@@ -155,36 +130,6 @@ def init_db():
     with pool.connection(timeout=10) as conn:
         with conn.cursor() as cur:
             cur.execute(SCHEMA_SQL)
-
-            # ---- Normalize legacy rows to IST 5-min slots (sec=0) ----
-            cur.execute("""
-                UPDATE views
-                SET ts = (
-                    (
-                        date_trunc('minute', (ts AT TIME ZONE 'Asia/Kolkata'))
-                        - make_interval(mins => MOD(EXTRACT(MINUTE FROM (ts AT TIME ZONE 'Asia/Kolkata'))::int, 5))
-                    ) AT TIME ZONE 'Asia/Kolkata'
-                )
-                WHERE EXTRACT(SECOND FROM ts) <> 0
-                   OR MOD(EXTRACT(MINUTE FROM (ts AT TIME ZONE 'Asia/Kolkata'))::int, 5) <> 0
-            """)
-
-            # ---- Deduplicate (keep the most recent id) before unique index ----
-            cur.execute("""
-                DELETE FROM views v
-                USING (
-                    SELECT video_id, ts, MAX(id) AS keep_id, COUNT(*) AS cnt
-                    FROM views
-                    GROUP BY 1,2
-                    HAVING COUNT(*) > 1
-                ) d
-                WHERE v.video_id = d.video_id
-                  AND v.ts = d.ts
-                  AND v.id <> d.keep_id
-            """)
-
-            # ---- Enforce uniqueness per slot ----
-            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uniq_views_vid_ts ON views(video_id, ts)")
 
 # ---------------------- YouTube API ----------------------
 def yt_client():
@@ -243,6 +188,21 @@ def try_advisory_lock(conn) -> bool:
 stop_event = threading.Event()
 tracker_thread = None
 
+def seconds_to_next_5min_boundary_IST(now_utc: datetime | None = None) -> float:
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+    now_ist = now_utc.astimezone(IST)
+    minute = now_ist.minute
+    if minute % 5 == 0 and now_ist.second < 3:
+        return 0.0
+    next_block_min = (minute // 5 + 1) * 5
+    if next_block_min >= 60:
+        target = (now_ist.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1))
+    else:
+        target = now_ist.replace(minute=next_block_min, second=0, microsecond=0)
+    delta = target - now_ist
+    return max(delta.total_seconds(), 0.0)
+
 def insert_snapshot(conn, video_id: str, ts_utc: datetime, views_val: int | None, likes_val: int | None):
     with conn.cursor() as cur:
         cur.execute("DELETE FROM views WHERE video_id=%s AND ts=%s", (video_id, ts_utc))
@@ -257,7 +217,7 @@ def poll_once(conn):
         videos = [r[0] for r in cur.fetchall()]
     if not videos:
         return
-    ts_utc = ist_slot_to_utc()
+    ts_utc = datetime.now(timezone.utc).replace(second=0, microsecond=0)
     for vid in videos:
         stats = fetch_video_stats(vid)
         if not stats:
@@ -274,27 +234,23 @@ def tracker_loop():
     app.logger.info("Tracker thread starting (per-iteration connection).")
     while not stop_event.is_set():
         try:
-            # Align to the next 5-minute boundary in IST
+            # Align to next 5-minute boundary in IST
             wait_sec = seconds_to_next_5min_boundary_IST()
             if wait_sec > 0:
                 stop_event.wait(wait_sec)
                 if stop_event.is_set():
                     break
 
-            # Borrow a connection just for this poll
             with pool.connection(timeout=10) as conn:
-                # Advisory lock per iteration; released when conn closes
                 if not try_advisory_lock(conn):
                     app.logger.debug("Tracker: lock not acquired this round (another instance is polling).")
                 else:
                     poll_once(conn)
 
-            # Small buffer to avoid duplicate work on the same minute
-            stop_event.wait(2)
+            stop_event.wait(2)  # tiny buffer
 
         except Exception as e:
             app.logger.exception(f"Tracker loop error: {e}")
-            # Backoff before retrying to avoid tight loops
             stop_event.wait(10)
 
     app.logger.info("Tracker thread stopped.")
@@ -340,8 +296,7 @@ def index():
             view_list = [r[1] for r in rows]
             j = 0
             for i, (ts, v, likes) in enumerate(rows):
-                # Display guard: ensure :00 seconds in IST
-                ts_ist = ts.astimezone(IST).replace(second=0, microsecond=0)
+                ts_ist = ts.astimezone(IST)
                 day_key = ts_ist.date().isoformat()
 
                 gain_5min = None if last_view is None else v - last_view
@@ -392,7 +347,7 @@ def add_video():
                 "ON CONFLICT (video_id) DO UPDATE SET title=EXCLUDED.title",
                 (vid, title),
             )
-            ts_utc = ist_slot_to_utc()
+            ts_utc = datetime.now(timezone.utc).replace(second=0, microsecond=0)
             insert_snapshot(conn, vid, ts_utc, views_val, likes_val)
         flash(f"Added: {title}", "success")
     except Exception as e:
