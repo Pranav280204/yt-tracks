@@ -1,275 +1,371 @@
-# app.py
 import os
+import re
 import threading
-import logging
 import time
-from datetime import datetime, timedelta
-from urllib.parse import parse_qs, urlparse
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+import logging
+from flask import Flask, render_template, request, redirect, url_for, flash, send_file
 import pandas as pd
-from flask import Flask, render_template, send_file, request, redirect, url_for, flash
 from googleapiclient.discovery import build
-from googleapiclient.errors import HttpError
 import psycopg
+from psycopg import sql
 from psycopg.rows import dict_row
-from io import BytesIO
-from zoneinfo import ZoneInfo  # <-- Use zoneinfo instead of pytz
 
 # === CONFIG ===
 app = Flask(__name__)
-app.secret_key = os.urandom(24)
+app.secret_key = os.getenv("FLASK_SECRET_KEY", "dev-secret-key-change-in-prod")
 
+# Environment variables
+DATABASE_URL = os.getenv("DATABASE_URL")
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+
+if not DATABASE_URL or not YOUTUBE_API_KEY:
+    raise RuntimeError("Set DATABASE_URL and YOUTUBE_API_KEY in environment")
+
+# IST Timezone
+IST = ZoneInfo("Asia/Kolkata")
+
+# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-API_KEY = os.getenv("YOUTUBE_API_KEY")
-youtube = build("youtube", "v3", developerKey=API_KEY) if API_KEY else None
+# Global YouTube client
+youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY, cache_discovery=False)
 
-POSTGRES_URL = os.getenv("DATABASE_URL")
-if POSTGRES_URL and not POSTGRES_URL.startswith("postgres://"):
-    POSTGRES_URL = POSTGRES_URL.replace("postgresql://", "postgres://", 1)
+# Background thread control
+tracker_thread = None
+stop_event = threading.Event()
 
-db_conn = None
-_background_thread = None
-
-# Use zoneinfo (thread-safe, built-in)
-IST = ZoneInfo("Asia/Kolkata")
-
-# === DB ===
+# === DATABASE HELPERS ===
 def get_db():
-    global db_conn
-    if db_conn is None or db_conn.closed:
-        db_conn = psycopg.connect(
-            POSTGRES_URL,
-            row_factory=dict_row,
-            keepalives=1,
-            keepalives_idle=30,
-            keepalives_interval=10,
-            keepalives_count=5,
-            connect_timeout=10,
-        )
-        db_conn.autocommit = True
-        init_db()
-    return db_conn
+    conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
+    conn.execute("SET TIME ZONE 'Asia/Kolkata';")
+    return conn
 
 def init_db():
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS views (
-            video_id TEXT NOT NULL,
-            date DATE NOT NULL,
-            timestamp TEXT NOT NULL,
-            views BIGINT NOT NULL,
-            likes BIGINT NOT NULL,
-            PRIMARY KEY (video_id, timestamp)
-        );
-    """)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS video_list (
-            video_id TEXT PRIMARY KEY,
-            name TEXT,
-            is_tracking INTEGER DEFAULT 1
-        );
-    """)
-    logger.info("DB initialized")
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS video_list (
+                    video_id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    added_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+                    paused BOOLEAN DEFAULT FALSE
+                );
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS views (
+                    id SERIAL PRIMARY KEY,
+                    video_id TEXT REFERENCES video_list(video_id) ON DELETE CASCADE,
+                    timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
+                    date DATE NOT NULL,
+                    views BIGINT,
+                    likes BIGINT,
+                    UNIQUE(video_id, timestamp)
+                );
+            """)
+            conn.commit()
 
-# === HELPERS ===
-def extract_video_id(link):
-    parsed = urlparse(link.strip())
-    if parsed.hostname in ("youtube.com", "www.youtube.com"):
-        return parse_qs(parsed.query).get("v", [None])[0]
-    if parsed.hostname == "youtu.be":
-        return parsed.path[1:] if len(parsed.path) > 1 else None
+# === YOUTUBE HELPERS ===
+def extract_video_id(url):
+    patterns = [
+        r"(?:v=|\/)([0-9A-Za-z_-]{11}).*",
+        r"(?:embed\/)([0-9A-Za-z_-]{11})",
+        r"(?:shorts\/)([0-9A-Za-z_-]{11})",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
     return None
 
-def fetch_video_title(vid):
-    if not youtube: return "Unknown"
+def fetch_video_stats(video_id):
     try:
-        resp = youtube.videos().list(part="snippet", id=vid).execute()
-        return resp["items"][0]["snippet"]["title"][:100] if resp["items"] else "Unknown"
-    except: return "Unknown"
-
-def fetch_views(ids):
-    if not youtube or not ids: return {}
-    try:
-        resp = youtube.videos().list(part="statistics", id=",".join(ids)).execute()
-        return {item["id"]: {
-            "views": int(item["statistics"].get("viewCount", 0)),
-            "likes": int(item["statistics"].get("likeCount", 0))
-        } for item in resp.get("items", [])}
-    except: return {}
-
-def safe_store(vid, stats):
-    conn = get_db()
-    now = datetime.now(IST)
-    ts = now.strftime("%Y-%m-%d %H:%M:%S")
-    date = now.strftime("%Y-%m-%d")
-    try:
-        with conn.cursor() as cur:
-            cur.execute("DELETE FROM views WHERE video_id=%s AND timestamp=%s", (vid, ts))
-            cur.execute("""
-                INSERT INTO views (video_id, date, timestamp, views, likes)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (vid, date, ts, stats["views"], stats["likes"]))
-        logger.info(f"STORED {vid} → {stats['views']:,}")
+        response = youtube.videos().list(
+            part="statistics,snippet",
+            id=video_id
+        ).execute()
+        if not response["items"]:
+            return None, None, None
+        item = response["items"][0]
+        stats = item["statistics"]
+        title = item["snippet"]["title"]
+        views = int(stats.get("viewCount", 0))
+        likes = int(stats.get("likeCount", 0))
+        return title, views, likes
     except Exception as e:
-        logger.error(f"Store failed: {e}")
+        logger.error(f"YouTube API error for {video_id}: {e}")
+        return None, None, None
 
-# === BACKGROUND TASK ===
-def start_background():
-    global _background_thread
-    if _background_thread: return
+# === BACKGROUND TRACKER ===
+def get_next_5min_ist():
+    now = datetime.now(IST)
+    minutes = (now.minute // 5) * 5
+    next_time = now.replace(minute=minutes, second=0, microsecond=0)
+    if next_time <= now:
+        next_time += timedelta(minutes=5)
+    return next_time
 
-    def run():
-        while True:
-            try:
-                now = datetime.now(IST)
-                wait = max(1, 300 - (now.minute % 5 * 60 + now.second))
-                time.sleep(wait)
+def tracker_loop():
+    logger.info("Starting YouTube tracker thread...")
+    while not stop_event.is_set():
+        next_run = get_next_5min_ist()
+        sleep_seconds = (next_run - datetime.now(IST)).total_seconds()
+        if sleep_seconds > 0:
+            logger.info(f"Sleeping {sleep_seconds:.0f}s until {next_run.strftime('%H:%M:%S IST')}")
+            stop_event.wait(sleep_seconds)
 
-                cur = get_db().cursor()
-                cur.execute("SELECT video_id FROM video_list WHERE is_tracking=1")
-                ids = [r["video_id"] for r in cur.fetchall()]
-                if ids:
-                    stats = fetch_views(ids)
-                    for vid in ids:
-                        if vid in stats:
-                            safe_store(vid, stats[vid])
-            except Exception as e:
-                logger.error(f"BG error: {e}")
-                time.sleep(60)
+        if stop_event.is_set():
+            break
 
-    _background_thread = threading.Thread(target=run, daemon=True)
-    _background_thread.start()
-    logger.info("Background started")
-
-# === PROCESS GAINS ===
-def process_gains(vid, rows):
-    if not rows: return []
-    result = []
-    for i, row in enumerate(rows):
-        views = row["views"]
-        likes = row["likes"]
-        ts = row["timestamp"]
-        date = row["date"]
-
-        gain = views - rows[i-1]["views"] if i > 0 and rows[i-1]["date"] == date else 0
-
-        ts_dt = datetime.strptime(ts, "%Y-%m-%d %H:%M:%S").replace(tzinfo=IST)
-        one_ago = (ts_dt - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
+        now_ist = datetime.now(IST)
+        timestamp = now_ist
+        date = now_ist.date()
 
         try:
-            cur = get_db().cursor()
-            cur.execute("""
-                SELECT views FROM views WHERE video_id=%s AND timestamp <= %s
-                ORDER BY timestamp DESC LIMIT 1
-            """, (vid, one_ago))
-            prev = cur.fetchone()
-            hourly = views - prev["views"] if prev else 0
-        except:
-            hourly = 0
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT video_id FROM video_list WHERE NOT paused
+                    """)
+                    active_videos = [row["video_id"] for row in cur.fetchall()]
 
-        result.append((ts, views, gain, hourly, likes))
-    return result
+            for video_id in active_videos:
+                title, views, likes = fetch_video_stats(video_id)
+                if views is None:
+                    logger.warning(f"Failed to fetch stats for {video_id}")
+                    continue
+
+                try:
+                    with get_db() as conn:
+                        with conn.cursor() as cur:
+                            # Delete any existing entry for this timestamp
+                            cur.execute("""
+                                DELETE FROM views WHERE video_id = %s AND timestamp = %s
+                            """, (video_id, timestamp))
+
+                            # Insert new snapshot
+                            cur.execute("""
+                                INSERT INTO views (video_id, timestamp, date, views, likes)
+                                VALUES (%s, %s, %s, %s, %s)
+                            """, (video_id, timestamp, date, views, likes))
+                        conn.commit()
+                    logger.info(f"Updated {video_id}: {views:,} views")
+                except Exception as e:
+                    logger.error(f"DB insert error for {video_id}: {e}")
+
+        except Exception as e:
+            logger.error(f"Tracker loop error: {e}")
+
+    logger.info("Tracker thread stopped.")
+
+def start_tracker():
+    global tracker_thread
+    if tracker_thread is None or not tracker_thread.is_alive():
+        stop_event.clear()
+        tracker_thread = threading.Thread(target=tracker_loop, daemon=True)
+        tracker_thread.start()
+        logger.info("Tracker thread started.")
 
 # === ROUTES ===
-@app.route("/", methods=["GET"])
+@app.route("/", methods=["GET", "POST"])
 def index():
-    videos = []
+    if request.method == "POST":
+        url = request.form.get("youtube_url", "").strip()
+        if not url:
+            flash("Please enter a YouTube URL.", "error")
+            return redirect(url_for("index"))
+
+        video_id = extract_video_id(url)
+        if not video_id:
+            flash("Invalid YouTube URL. Please check and try again.", "error")
+            return redirect(url_for("index"))
+
+        title, views, likes = fetch_video_stats(video_id)
+        if not title:
+            flash("Could not fetch video. It may be private or deleted.", "error")
+            return redirect(url_for("index"))
+
+        try:
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO video_list (video_id, title)
+                        VALUES (%s, %s)
+                        ON CONFLICT (video_id) DO UPDATE SET paused = FALSE
+                    """, (video_id, title))
+                    # Insert first snapshot
+                    now_ist = datetime.now(IST)
+                    cur.execute("""
+                        INSERT INTO views (video_id, timestamp, date, views, likes)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (video_id, timestamp) DO NOTHING
+                    """, (video_id, now_ist, now_ist.date(), views, likes))
+                conn.commit()
+            flash(f"Started tracking: {title}", "success")
+        except Exception as e:
+            logger.error(f"Add video error: {e}")
+            flash("Database error. Try again.", "error")
+
+        return redirect(url_for("index"))
+
+    # GET: Show dashboard
     try:
-        cur = get_db().cursor()
-        cur.execute("SELECT video_id, name, is_tracking FROM video_list ORDER BY name")
-        for row in cur.fetchall():
-            vid = row["video_id"]
-            cur.execute("SELECT DISTINCT date FROM views WHERE video_id=%s ORDER BY date DESC", (vid,))
-            dates = [r["date"] for r in cur.fetchall()]
-
-            daily = {}
-            for d in dates:
+        with get_db() as conn:
+            with conn.cursor() as cur:
                 cur.execute("""
-                    SELECT timestamp, views, likes, date FROM views
-                    WHERE video_id=%s AND date=%s ORDER BY timestamp ASC
-                """, (vid, d))
-                daily[d] = process_gains(vid, cur.fetchall())
+                    SELECT video_id, title, paused, added_at
+                    FROM video_list
+                    ORDER BY added_at DESC
+                """)
+                videos = cur.fetchall()
 
-            videos.append({
-                "video_id": vid,
-                "name": row["name"] or "Unknown",
-                "daily_data": daily,
-                "is_tracking": bool(row["is_tracking"])
+        video_data = []
+        for video in videos:
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    # Get daily data
+                    cur.execute("""
+                        SELECT date, timestamp, views, likes
+                        FROM views
+                        WHERE video_id = %s
+                        ORDER BY timestamp
+                    """, (video["video_id"],))
+                    rows = cur.fetchall()
+
+            if not rows:
+                continue
+
+            df = pd.DataFrame(rows)
+            daily_groups = df.groupby("date")
+
+            daily_tabs = []
+            for date, group in daily_groups:
+                group = group.sort_values("timestamp")
+                group["gain_5min"] = group["views"].diff().fillna(0).astype(int)
+                group["time_str"] = group["timestamp"].dt.strftime("%H:%M")
+                group["views_str"] = group["views"].apply(lambda x: f"{x:,}")
+
+                # Hourly rate: last 60 mins
+                hourly_rates = []
+                for _, row in group.iterrows():
+                    hour_ago = row["timestamp"] - timedelta(minutes=60)
+                    past = group[group["timestamp"] <= hour_ago]
+                    if not past.empty:
+                        gain = row["views"] - past.iloc[-1]["views"]
+                        hourly_rates.append(gain)
+                    else:
+                        hourly_rates.append(0)
+                group["hourly_rate"] = hourly_rates
+
+                daily_tabs.append({
+                    "date": date.strftime("%Y-%m-%d"),
+                    "date_display": date.strftime("%b %d, %Y"),
+                    "rows": group.to_dict("records")
+                })
+
+            video_data.append({
+                "video_id": video["video_id"],
+                "title": video["title"],
+                "paused": video["paused"],
+                "daily_tabs": daily_tabs
             })
-        return render_template("index.html", videos=videos)
+
+        return render_template("index.html", videos=video_data)
+
     except Exception as e:
-        logger.error(f"Index error: {e}", exc_info=True)
-        flash("Database temporarily unavailable. Retrying...", "error")
+        logger.error(f"Dashboard error: {e}")
+        flash("Error loading dashboard.", "error")
         return render_template("index.html", videos=[])
 
-@app.route("/add_video", methods=["POST"])
-def add_video():
-    link = request.form.get("video_link", "").strip()
-    if not link:
-        flash("Enter a link", "error")
-        return redirect(url_for("index"))
 
-    vid = extract_video_id(link)
-    if not vid:
-        flash("Invalid link", "error")
-        return redirect(url_for("index"))
-
-    title = fetch_video_title(vid)
-    stats = fetch_views([vid])
-    if vid not in stats:
-        flash("Can't fetch stats", "error")
-        return redirect(url_for("index"))
-
-    cur = get_db().cursor()
-    cur.execute("""
-        INSERT INTO video_list (video_id, name, is_tracking)
-        VALUES (%s, %s, 1)
-        ON CONFLICT (video_id) DO UPDATE SET name=%s, is_tracking=1
-    """, (vid, title, title))
-    safe_store(vid, stats[vid])
-    flash(f"Added: {title[:50]}...", "success")
+@app.route("/pause/<video_id>")
+def pause(video_id):
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE video_list SET paused = TRUE WHERE video_id = %s
+                """, (video_id,))
+                conn.commit()
+        flash("Tracking paused.", "info")
+    except:
+        flash("Error pausing video.", "error")
     return redirect(url_for("index"))
 
-@app.route("/toggle_tracking/<video_id>")
-def toggle_tracking(video_id):
-    cur = get_db().cursor()
-    cur.execute("SELECT is_tracking FROM video_list WHERE video_id=%s", (video_id,))
-    row = cur.fetchone()
-    if row:
-        cur.execute("UPDATE video_list SET is_tracking=%s WHERE video_id=%s",
-                    (0 if row["is_tracking"] else 1, video_id))
+@app.route("/resume/<video_id>")
+def resume(video_id):
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE video_list SET paused = FALSE WHERE video_id = %s
+                """, (video_id,))
+                conn.commit()
+        flash("Tracking resumed.", "success")
+    except:
+        flash("Error resuming video.", "error")
     return redirect(url_for("index"))
 
-@app.route("/remove_video/<video_id>")
-def remove_video(video_id):
-    cur = get_db().cursor()
-    cur.execute("DELETE FROM views WHERE video_id=%s", (video_id,))
-    cur.execute("DELETE FROM video_list WHERE video_id=%s", (video_id,))
+@app.route("/remove/<video_id>")
+def remove(video_id):
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM video_list WHERE video_id = %s", (video_id,))
+                conn.commit()
+        flash("Video removed permanently.", "info")
+    except:
+        flash("Error removing video.", "error")
     return redirect(url_for("index"))
 
 @app.route("/export/<video_id>")
 def export(video_id):
-    cur = get_db().cursor()
-    cur.execute("SELECT name FROM video_list WHERE video_id=%s", (video_id,))
-    row = cur.fetchone()
-    if not row: return redirect(url_for("index"))
-    name = row["name"]
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT title FROM video_list WHERE video_id = %s
+                """, (video_id,))
+                row = cur.fetchone()
+                if not row:
+                    flash("Video not found.", "error")
+                    return redirect(url_for("index"))
+                title = row["title"]
 
-    cur.execute("SELECT timestamp, views, likes FROM views WHERE video_id=%s ORDER BY timestamp", (video_id,))
-    rows = cur.fetchall()
-    data = [{"Time": r["timestamp"], "Views": r["views"], "Likes": r["likes"]} for r in rows]
-    df = pd.DataFrame(data)
+                cur.execute("""
+                    SELECT timestamp, views
+                    FROM views
+                    WHERE video_id = %s
+                    ORDER BY timestamp
+                """, (video_id,))
+                rows = cur.fetchall()
 
-    output = BytesIO()
-    df.to_excel(output, index=False)
-    output.seek(0)
-    return send_file(output, download_name=f"{name}_views.xlsx", as_attachment=True)
+        if not rows:
+            flash("No data to export.", "error")
+            return redirect(url_for("index"))
 
-# === START ===
-init_db()
-start_background()
+        df = pd.DataFrame(rows, columns=["Time (IST)", "Views"])
+        filename = f"{title.replace(' ', '_')[:30]}_views.xlsx"
+        output = pd.ExcelWriter(filename, engine="openpyxl")
+        df.to_excel(output, index=False)
+        output.close()
 
+        return send_file(
+            filename,
+            as_attachment=True,
+            download_name=filename,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+    except Exception as e:
+        logger.error(f"Export error: {e}")
+        flash("Export failed.", "error")
+        return redirect(url_for("index"))
+
+# === STARTUP ===
 if __name__ == "__main__":
+    init_db()
+    start_tracker()
+    # For Render/Railway: use gunicorn
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
