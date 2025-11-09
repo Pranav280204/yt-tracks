@@ -42,7 +42,6 @@ ADVISORY_LOCK_KEY = 9876543210123
 # === DATABASE ===
 def get_db():
     conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
-    # Ensure we always use the same schema + timezone
     conn.execute("CREATE SCHEMA IF NOT EXISTS yt_tracker;")
     conn.execute("SET search_path TO yt_tracker, public;")
     conn.execute("SET TIME ZONE 'Asia/Kolkata';")
@@ -109,38 +108,32 @@ def fetch_video_stats(video_id: str):
 
 # === SCHEDULER TICK ===
 def _aligned_5min(dt: datetime) -> datetime:
-    # Align to clock minute (*/5) with zero seconds
     minute = (dt.minute // 5) * 5
     return dt.replace(minute=minute, second=0, microsecond=0)
 
 def tick():
     """Runs every 5 minutes. Uses an advisory lock so only one worker runs."""
     now = datetime.now(IST)
-    ts = now.replace(second=0, microsecond=0)  # already on */5 due to cron; safe to normalize
+    ts = now.replace(second=0, microsecond=0)
     date = ts.date()
 
     try:
         with get_db() as conn:
             with conn.cursor() as cur:
-                # Try to take the advisory lock
                 cur.execute("SELECT pg_try_advisory_lock(%s);", (ADVISORY_LOCK_KEY,))
                 locked = cur.fetchone()["pg_try_advisory_lock"]
                 if not locked:
                     logger.debug("Another worker holds the tick lock; skipping this run.")
                     return
 
-                # Load active videos
                 cur.execute("SELECT video_id FROM yt_tracker.video_list WHERE NOT paused;")
                 videos = [r["video_id"] for r in cur.fetchall()]
 
                 updated = 0
-
                 for vid in videos:
                     title, views, likes = fetch_video_stats(vid)
                     if views is None:
                         continue
-
-                    # Insert/update in one place to avoid duplicates or missing likes refresh
                     cur.execute("""
                         INSERT INTO yt_tracker.views (video_id, timestamp, date, views, likes)
                         VALUES (%s, %s, %s, %s, %s)
@@ -150,19 +143,16 @@ def tick():
                     """, (vid, ts, date, views, likes))
                     updated += 1
 
-                # Save last tick time to meta (handy for UI/diagnostics)
                 cur.execute("""
                     INSERT INTO yt_tracker.meta (k, v)
                     VALUES ('last_tick_ist', %s)
                     ON CONFLICT (k) DO UPDATE SET v = EXCLUDED.v
                 """, (ts.isoformat(),))
-
             conn.commit()
         logger.info(f"[tick] {updated} videos updated at {ts.isoformat()}")
     except Exception as e:
         logger.error(f"[tick] error: {e}")
     finally:
-        # Best-effort unlock
         try:
             with get_db() as conn:
                 with conn.cursor() as cur:
@@ -175,8 +165,7 @@ def start_scheduler_once():
     global _scheduler_started
     if _scheduler_started:
         return
-    init_db()  # ensure schema exists before scheduling
-    # Run exactly on */5 (00,05,10,...)
+    init_db()
     scheduler.add_job(tick, CronTrigger(minute="*/5"))
     scheduler.start()
     _scheduler_started = True
@@ -184,11 +173,6 @@ def start_scheduler_once():
 
 # Start scheduler at import time (works under Gunicorn as well).
 start_scheduler_once()
-
-# Also kick it in case of some edge server setups that import lazily
-@app.before_first_request
-def _kick_scheduler():
-    start_scheduler_once()
 
 # === ROUTES ===
 @app.route("/", methods=["GET", "POST"])
@@ -218,7 +202,6 @@ def index():
                         ON CONFLICT (video_id) DO UPDATE SET paused = FALSE, title = EXCLUDED.title
                     """, (vid, title))
 
-                    # Seed an initial row aligned to current 5-min bucket for a neat chart
                     now_ist = datetime.now(IST)
                     seed_ts = _aligned_5min(now_ist)
                     cur.execute("""
@@ -235,7 +218,6 @@ def index():
             flash("Database error.", "error")
         return redirect(url_for("index"))
 
-    # GET: Dashboard
     try:
         with get_db() as conn:
             with conn.cursor() as cur:
@@ -245,8 +227,6 @@ def index():
                     ORDER BY added_at DESC
                 """)
                 videos = cur.fetchall()
-
-                # last tick time (if available)
                 cur.execute("SELECT v FROM yt_tracker.meta WHERE k = 'last_tick_ist';")
                 row = cur.fetchone()
                 last_tick = row["v"] if row else None
@@ -272,11 +252,8 @@ def index():
             tabs = []
             for date_key, g in daily_groups:
                 g = g.sort_values("timestamp").copy()
-
-                # 5-min gain
                 g["gain_5min"] = g["views"].diff().fillna(0).astype(int)
 
-                # hourly rolling (relative to 60 min earlier)
                 hourly = []
                 for _, r in g.iterrows():
                     ago = r["timestamp"] - timedelta(minutes=60)
@@ -381,5 +358,4 @@ def health():
 
 # === LOCAL DEV ENTRYPOINT ===
 if __name__ == "__main__":
-    # Local dev: Flask built-in server; scheduler already started
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
