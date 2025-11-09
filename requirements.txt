@@ -8,5 +8,6 @@ pandas==2.2.3
 openpyxl==3.1.5
 # DB
 psycopg[binary]==3.2.3
+psycopg-pool==3.2.3
 # REMOVE pytz – we use built-in zoneinfo (thread-safe)
 # REMOVE psutil – not needed
