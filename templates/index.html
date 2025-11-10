@@ -4,52 +4,34 @@
   <meta charset="utf-8">
   <title>YouTube Views Tracker</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
-
-  <!-- Bootstrap (CDN) -->
+  <!-- Bootstrap -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-
   <style>
     :root{
-      --blue-very-light:#e9f2ff;   /* faint blue */
-      --green-very-light:#eaf7ef;  /* faint green */
-      --red-very-light:#fdeef0;    /* faint red  */
-      --blue-mid:#2a66ff;
-      --grey-100:#f7f7f9;
-      --grey-300:#e5e7eb;
-      --text:#0f0f14;              /* dark black-ish for text */
-      --muted:#6b7280;
+      --accent-blue:#e9f3ff;   /* faint blue bg */
+      --accent-green:#e9f9f0;  /* faint green bg */
+      --accent-red:#ffecec;    /* faint red bg */
+      --text-dark:#0a0a0a;     /* near-black text */
+      --muted:#5b5b5b;
+      --border:#e6e6e6;
     }
-    body{ background:#fff; color:var(--text); }
-    .page-subtle { color:var(--muted); }
-
-    .card{ background:#fff; border:1px solid var(--grey-300); }
-    .badge.paused{ background:#6c757d; }
-
-    .btn-outline-primary{ --bs-btn-color:var(--blue-mid); --bs-btn-border-color:var(--blue-mid); }
-    .btn-outline-danger{ --bs-btn-color:#dc3545; --bs-btn-border-color:#dc3545; }
-    .btn-outline-warning{ --bs-btn-color:#b35b00; --bs-btn-border-color:#ffc107; }
-
-    .pill-positive{ background:var(--green-very-light); }
-    .pill-negative{ background:var(--red-very-light); }
-    .pill-neutral{ background:var(--blue-very-light); }
-    .muted{ color:var(--muted); }
-
-    .table thead th{ font-weight:600; color:var(--muted); border-bottom:2px solid var(--grey-300); }
-    .table tbody td{ vertical-align: middle; }
-
-    .row-divider{ height:1px; background:var(--grey-300); margin: 0.5rem 0 1rem; }
-
-    .dropdown-item.active-date,
-    .dropdown-item:active{ background: var(--blue-very-light); color: var(--text); }
+    body{ background:#ffffff; color:var(--text-dark);}
+    .card{ background:#fff; border:1px solid var(--border); }
+    .badge.paused{ background:#adb5bd; }
+    .gain-pos{ background:var(--accent-green); padding:.1rem .4rem; border-radius:.25rem;}
+    .gain-neg{ background:var(--accent-red); padding:.1rem .4rem; border-radius:.25rem;}
+    .gain-null{ color:var(--muted); }
+    .muted{ color:var(--muted);}
+    .tab-btn{ border:1px solid var(--border); background:#fff; }
+    .tab-btn.active{ background:var(--accent-blue); }
+    .table thead th{ color:#222; }
+    .btn-outline-light{ border-color:var(--border); }
   </style>
 </head>
 <body>
 <div class="container py-4">
-
-  <header class="mb-4">
-    <h1 class="mb-1">📈 YouTube Views Tracker</h1>
-    <div class="page-subtle">All times in IST (Asia/Kolkata). Sampler runs every 5 minutes aligned to 00, 05, 10, …</div>
-  </header>
+  <h1 class="mb-2">📈 YouTube Views Tracker</h1>
+  <p class="muted">All timestamps shown in IST (Asia/Kolkata). Samples every 5 minutes (00, 05, 10, …).</p>
 
   <!-- Alerts -->
   {% with messages = get_flashed_messages(with_categories=true) %}
@@ -88,109 +70,82 @@
       <div class="col-12">
         <div class="card">
           <div class="card-body">
-            <!-- Header Row -->
-            <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
-              <div>
-                <h3 class="mb-1">
-                  {{ v.name }}
-                  {% if not v.is_tracking %}
-                    <span class="badge paused ms-2">Paused</span>
-                  {% endif %}
-                </h3>
-                <div class="muted small">Select a date from the dropdown to open the table.</div>
-              </div>
-
-              <div class="d-flex gap-2">
-                <!-- Dropdown button to open a date (collapsible sections) -->
-                <div class="btn-group">
-                  <button class="btn btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
-                    Open View Data
-                  </button>
-                  <ul class="dropdown-menu dropdown-menu-end">
-                    {% if v.daily_data|length == 0 %}
-                      <li><span class="dropdown-item disabled">No data yet</span></li>
-                    {% else %}
-                      {# dates already newest->oldest from backend; keep order #}
-                      {% for d, rows in v.daily_data.items() %}
-                        <li>
-                          <a class="dropdown-item" href="#" data-open="#panel-{{ v.video_id }}-{{ loop.index }}">
-                            {{ d }}
-                          </a>
-                        </li>
-                      {% endfor %}
-                    {% endif %}
-                  </ul>
-                </div>
-
-                <a class="btn btn-outline-secondary" href="{{ url_for('export_video', video_id=v.video_id) }}">Export to Excel</a>
-                <a class="btn btn-outline-warning" href="{{ url_for('stop_tracking', video_id=v.video_id) }}">
+            <div class="d-flex align-items-center justify-content-between flex-wrap">
+              <h4 class="mb-2">
+                {{ v.name }}
+                {% if not v.is_tracking %}
+                  <span class="badge paused ms-2">Paused</span>
+                {% endif %}
+              </h4>
+              <div class="mb-2 d-flex gap-2">
+                <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('export_video', video_id=v.video_id) }}">Export to Excel</a>
+                <a class="btn btn-sm btn-outline-warning" href="{{ url_for('stop_tracking', video_id=v.video_id) }}">
                   {% if v.is_tracking %}Pause{% else %}Resume{% endif %}
                 </a>
-                <a class="btn btn-outline-danger" href="{{ url_for('remove_video', video_id=v.video_id) }}" onclick="return confirm('Delete this video and ALL its data?')">Remove</a>
+                <a class="btn btn-sm btn-outline-danger" href="{{ url_for('remove_video', video_id=v.video_id) }}" onclick="return confirm('Delete this video and ALL its data?')">Remove</a>
               </div>
             </div>
 
-            <div class="row-divider"></div>
-
             {% if v.daily_data|length == 0 %}
-              <p class="muted mb-0">No samples yet. First snapshot will appear after the next 5-minute tick.</p>
+              <p class="muted mb-0">No samples yet. First snapshot will appear after the next tick.</p>
             {% else %}
-              <!-- Collapsible panels for each date -->
+              <!-- Day Pills (newest first already) -->
+              <div class="mb-3 d-flex flex-wrap gap-2">
+                {% set first = True %}
+                {% for d, rows in v.daily_data.items() %}
+                  <button class="btn btn-sm tab-btn {% if first %}active{% endif %}" data-bs-toggle="collapse"
+                          data-bs-target="#pane-{{ v.video_id }}-{{ loop.index }}" aria-expanded="{{ 'true' if first else 'false' }}">
+                    {{ d }}
+                  </button>
+                  {% set first = False %}
+                {% endfor %}
+              </div>
+
               {% set first = True %}
               {% for d, rows in v.daily_data.items() %}
-                <div class="mb-3">
-                  <button
-                    class="btn btn-link text-decoration-none px-0"
-                    type="button"
-                    data-bs-toggle="collapse"
-                    data-bs-target="#panel-{{ v.video_id }}-{{ loop.index }}"
-                    aria-expanded="{{ 'true' if first else 'false' }}"
-                    aria-controls="panel-{{ v.video_id }}-{{ loop.index }}"
-                  >
-                    <strong>{{ d }}</strong>
-                    <span class="ms-2 muted">(click to {{ 'collapse' if first else 'expand' }})</span>
-                  </button>
-
-                  <div id="panel-{{ v.video_id }}-{{ loop.index }}" class="collapse {% if first %}show{% endif %}">
-                    <div class="table-responsive">
-                      <table class="table table-hover align-middle">
-                        <thead>
-                          <tr>
-                            <th style="min-width:180px;">Time (IST)</th>
-                            <th style="min-width:140px;">Total Views</th>
-                            <th style="min-width:120px;">Gain (5 min)</th>
-                            <th style="min-width:140px;">Hourly Growth</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {# Show newest first: reverse the processed rows #}
-                          {% for ts, views, gain, hourly in rows|reverse %}
-                            <tr>
-                              <td class="muted">{{ ts }}</td>
-                              <td>{{ "{:,}".format(views) }}</td>
-                              <td>
-                                {% if gain is none %}
-                                  <span class="badge rounded-pill pill-neutral">—</span>
-                                {% else %}
-                                  <span class="badge rounded-pill {{ 'pill-positive' if gain>=0 else 'pill-negative' }}">
-                                    {{ '+' if gain>=0 else '' }}{{ "{:,}".format(gain) }}
-                                  </span>
-                                {% endif %}
-                              </td>
-                              <td>
-                                {% if hourly is none %}
-                                  <span class="badge rounded-pill pill-neutral">—</span>
-                                {% else %}
-                                  <span class="badge rounded-pill {{ 'pill-positive' if hourly>=0 else 'pill-negative' }}">
-                                    {{ '+' if hourly>=0 else '' }}{{ "{:,}".format(hourly) }}
-                                  </span>
-                                {% endif %}
-                              </td>
-                            </tr>
-                          {% endfor %}
-                        </tbody>
-                      </table>
-                    </div>
+                <div id="pane-{{ v.video_id }}-{{ loop.index }}" class="collapse {% if first %}show{% endif %}">
+                  <div class="table-responsive">
+                    <table class="table table-sm align-middle">
+                      <thead>
+                        <tr>
+                          <th>Time (IST)</th>
+                          <th>Total Views</th>
+                          <th>Gain (5 min)</th>
+                          <th>Hourly Growth</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                      {# rows are newest-first already #}
+                      {% for ts, views, gain, hourly in rows %}
+                        <tr>
+                          <td>{{ ts }}</td>
+                          <td>{{ "{:,}".format(views) }}</td>
+                          <td>
+                            {% if gain is none %}
+                              <span class="gain-null">—</span>
+                            {% else %}
+                              {% if gain >= 0 %}
+                                <span class="gain-pos">+{{ "{:,}".format(gain) }}</span>
+                              {% else %}
+                                <span class="gain-neg">{{ "{:,}".format(gain) }}</span>
+                              {% endif %}
+                            {% endif %}
+                          </td>
+                          <td>
+                            {% if hourly is none %}
+                              <span class="gain-null">—</span>
+                            {% else %}
+                              {% if hourly >= 0 %}
+                                <span class="gain-pos">+{{ "{:,}".format(hourly) }}</span>
+                              {% else %}
+                                <span class="gain-neg">{{ "{:,}".format(hourly) }}</span>
+                              {% endif %}
+                            {% endif %}
+                          </td>
+                        </tr>
+                      {% endfor %}
+                      </tbody>
+                    </table>
                   </div>
                 </div>
                 {% set first = False %}
@@ -202,39 +157,11 @@
     {% endfor %}
   </div>
 
-  <footer class="mt-4 mb-3 text-center muted small">
-    Runs every 5 minutes • Stored in PostgreSQL • Export as .xlsx
+  <footer class="mt-4 mb-3 text-center muted">
+    Stored in PostgreSQL • UTC in DB, shown in IST • No graphs
   </footer>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
-<script>
-  // When a date is selected from the dropdown, open its collapse panel (and close others for the same video).
-  document.addEventListener('click', function(e){
-    const item = e.target.closest('.dropdown-menu .dropdown-item[data-open]');
-    if(!item) return;
-    e.preventDefault();
-    const targetSel = item.getAttribute('data-open');
-    const target = document.querySelector(targetSel);
-    if(!target) return;
-
-    // Close sibling panels within the same card
-    const card = item.closest('.card');
-    card.querySelectorAll('.collapse.show').forEach(c => {
-      if('#'+c.id !== targetSel) {
-        const inst = bootstrap.Collapse.getOrCreateInstance(c, {toggle:false});
-        inst.hide();
-      }
-    });
-
-    // Show requested panel
-    const inst = bootstrap.Collapse.getOrCreateInstance(target, {toggle:false});
-    inst.show();
-
-    // Mark active item
-    item.closest('.dropdown-menu').querySelectorAll('.dropdown-item').forEach(li => li.classList.remove('active-date'));
-    item.classList.add('active-date');
-  }, {passive:false});
-</script>
 </body>
 </html>
