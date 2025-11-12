@@ -159,11 +159,15 @@
                           <th>Total Views</th>
                           <th>Gain (5 min)</th>
                           <th>Hourly Growth</th>
+                          <th>
+                            24h Gain
+                            <span class="muted small" data-bs-toggle="tooltip" title="24h gain uses linear interpolation between nearest samples when exact 24h sample is not available.">ⓘ</span>
+                          </th>
                           <th>Change vs prev day (%)</th>
                         </tr>
                       </thead>
                       <tbody>
-                      {% for ts, views, gain, hourly, pct in rows %}
+                      {% for ts, views, gain, hourly, gain24, pct in rows %}
                         <tr>
                           <td class="mono">{{ ts }}</td>
                           <td class="mono">{{ "{:,}".format(views) }}</td>
@@ -183,6 +187,15 @@
                               <span class="gain-pos">+{{ "{:,}".format(hourly) }}</span>
                             {% else %}
                               <span class="gain-neg">{{ "{:,}".format(hourly) }}</span>
+                            {% endif %}
+                          </td>
+                          <td>
+                            {% if gain24 is none %}
+                              <span class="gain-null">—</span>
+                            {% elif gain24 >= 0 %}
+                              <span class="gain-pos">+{{ "{:,}".format(gain24) }}</span>
+                            {% else %}
+                              <span class="gain-neg">{{ "{:,}".format(gain24) }}</span>
                             {% endif %}
                           </td>
                           <td>
@@ -212,9 +225,17 @@
   </div>
 
   <footer class="mt-4 mb-3 text-center muted">
-    Stored in PostgreSQL • UTC in DB, shown in IST • Includes target calculations and % change vs previous day
+    Stored in PostgreSQL • UTC in DB, shown in IST • Interpolated 24h gain + targets export added
   </footer>
 </div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+  // enable Bootstrap tooltips
+  var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
+  tooltipTriggerList.forEach(function (el) {
+    new bootstrap.Tooltip(el)
+  })
+</script>
 </body>
 </html>
