@@ -1,4 +1,3 @@
-# Full app.py with 24h gain + export including new column
 import os
 import threading
 import logging
@@ -91,7 +90,6 @@ def init_db():
           FOREIGN KEY (video_id) REFERENCES video_list(video_id) ON DELETE CASCADE
         );
         """)
-        # new: targets table
         cur.execute("""
         CREATE TABLE IF NOT EXISTS targets (
           id           SERIAL PRIMARY KEY,
@@ -181,20 +179,57 @@ def safe_store(video_id: str, stats: dict):
         )
 
 
+def interpolate_views_at(rows_asc: list[dict], target_ts: datetime) -> Optional[float]:
+    """
+    Return interpolated views at target_ts (tz-aware). If exact match exists return that value.
+    If target_ts < first ts or > last ts return None.
+    Interpolation between bracketing samples (linear in time).
+    """
+    if not rows_asc:
+        return None
+    # exact match
+    for r in rows_asc:
+        if r["ts_utc"] == target_ts:
+            return float(r["views"])
+    # find bracketing indices
+    prev = None
+    for r in rows_asc:
+        if r["ts_utc"] < target_ts:
+            prev = r
+            continue
+        # r.ts_utc > = target_ts
+        if r["ts_utc"] > target_ts and prev is not None:
+            t0 = prev["ts_utc"].timestamp()
+            v0 = float(prev["views"])
+            t1 = r["ts_utc"].timestamp()
+            v1 = float(r["views"])
+            if t1 == t0:
+                return v1
+            frac = (target_ts.timestamp() - t0) / (t1 - t0)
+            return v0 + frac * (v1 - v0)
+        # if prev is None and r.ts_utc >= target_ts -> target is before first sample
+        if prev is None:
+            return None
+    # target after last sample -> None
+    return None
+
+
 def process_gains(rows_asc: list[dict]):
     """
     Input: rows ascending by ts_utc.
-    Output: list of tuples per row:
+    Output: list of tuples:
       (ts_ist_str, views, gain_5min, hourly_gain, gain_24h)
+    24h gain uses interpolation when needed.
     """
     out = []
     for i, r in enumerate(rows_asc):
-        ts_ist = r["ts_utc"].astimezone(IST).strftime("%Y-%m-%d %H:%M:%S")
+        ts_utc = r["ts_utc"]
+        ts_ist = ts_utc.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S")
         views = r["views"]
         gain = None if i == 0 else views - rows_asc[i - 1]["views"]
 
-        # hourly gain vs latest row <= ts - 1h
-        target_h = r["ts_utc"] - timedelta(hours=1)
+        # hourly: latest row <= ts - 1h
+        target_h = ts_utc - timedelta(hours=1)
         ref_idx_h = None
         for j in range(i, -1, -1):
             if rows_asc[j]["ts_utc"] <= target_h:
@@ -202,14 +237,19 @@ def process_gains(rows_asc: list[dict]):
                 break
         hourly = None if ref_idx_h is None else (views - rows_asc[ref_idx_h]["views"])
 
-        # 24h gain vs latest row <= ts - 24h
-        target_d = r["ts_utc"] - timedelta(days=1)
-        ref_idx_d = None
-        for j in range(i, -1, -1):
-            if rows_asc[j]["ts_utc"] <= target_d:
-                ref_idx_d = j
-                break
-        gain_24h = None if ref_idx_d is None else (views - rows_asc[ref_idx_d]["views"])
+        # 24h: prefer interpolation using available asc rows
+        target_d = ts_utc - timedelta(days=1)
+        interp = interpolate_views_at(rows_asc, target_d)
+        if interp is None:
+            # fallback: use latest row <= target_d
+            ref_idx_d = None
+            for j in range(i, -1, -1):
+                if rows_asc[j]["ts_utc"] <= target_d:
+                    ref_idx_d = j
+                    break
+            gain_24h = None if ref_idx_d is None else (views - rows_asc[ref_idx_d]["views"])
+        else:
+            gain_24h = views - int(round(interp))
 
         out.append((ts_ist, views, gain, hourly, gain_24h))
     return out
@@ -283,7 +323,7 @@ def index():
         for v in videos:
             vid = v["video_id"]
 
-            # ---- daily data and %change (same as before, now with 24h gain) ----
+            # ---- daily data and %change (now with interpolation 24h) ----
             cur.execute(
                 "SELECT DISTINCT date_ist FROM views WHERE video_id=%s ORDER BY date_ist DESC", (vid,)
             )
@@ -300,7 +340,6 @@ def index():
                     continue
                 processed = process_gains(asc_rows)  # tuples: ts, views, gain5, hourly, gain24
                 date_to_processed[d] = processed
-                # map by clock time (HH:MM:SS)
                 date_to_time_map[d] = {tpl[0].split(" ")[1]: tpl for tpl in processed}
 
             daily = {}
@@ -321,7 +360,7 @@ def index():
                     if prev_hourly not in (None, 0):
                         pct = round(((hourly_gain or 0) - prev_hourly) / prev_hourly * 100, 2)
 
-                    # now row contains: ts, views, gain_5min, hourly_gain, gain_24h, pct
+                    # row: ts, views, gain5, hourly, gain24, pct
                     display_rows.append((ts_ist, views, gain_5min, hourly_gain, gain_24h, pct))
                 daily[d.strftime("%Y-%m-%d")] = list(reversed(display_rows))
 
@@ -489,6 +528,10 @@ def export_video(video_id):
         cur.execute("SELECT ts_utc, views FROM views WHERE video_id=%s ORDER BY ts_utc ASC", (video_id,))
         asc_rows = cur.fetchall()
 
+        # fetch targets for separate sheet
+        cur.execute("SELECT id, target_views, target_ts, note FROM targets WHERE video_id=%s ORDER BY target_ts ASC", (video_id,))
+        target_rows = cur.fetchall()
+
     if not asc_rows:
         flash("No data to export yet.", "warning")
         return redirect(url_for("index"))
@@ -496,7 +539,6 @@ def export_video(video_id):
     processed = process_gains(asc_rows)  # (ts, views, gain5, hourly, gain24)
 
     # Build percent change vs prev day (same rule used for page)
-    # Build a map of date -> time -> tpl to find prev-day hourly
     date_map = {}
     for tpl in processed:
         date_str = tpl[0].split(" ")[0]
@@ -525,11 +567,54 @@ def export_video(video_id):
             "Change vs prev day (%)": pct if pct is not None else ""
         })
 
-    df = pd.DataFrame(rows_for_df)
+    df_views = pd.DataFrame(rows_for_df)
+
+    # Build targets sheet data
+    nowu = now_utc()
+    targets_rows_for_df = []
+    for t in target_rows:
+        tid = t["id"]
+        t_views = t["target_views"]
+        t_ts = t["target_ts"]
+        note = t["note"]
+        # compute required figures similar to index()
+        # get latest views (last processed row)
+        latest_views = processed[-1][1] if processed else None
+        remaining_views = t_views - (latest_views or 0)
+        remaining_seconds = (t_ts - nowu).total_seconds()
+        if remaining_views <= 0:
+            status = "Reached"
+            req_hr = 0
+            req_5m = 0
+        elif remaining_seconds <= 0:
+            status = "Overdue"
+            req_hr = math.ceil(remaining_views)
+            req_5m = math.ceil(req_hr / 12)
+        else:
+            status = "Active"
+            hrs = max(remaining_seconds / 3600.0, 1/3600)
+            req_hr = math.ceil(remaining_views / hrs)
+            req_5m = math.ceil(req_hr / 12)
+
+        targets_rows_for_df.append({
+            "Target ID": tid,
+            "Target views": t_views,
+            "Target time (IST)": t_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S"),
+            "Status": status,
+            "Remaining views": remaining_views,
+            "Required / hr": req_hr,
+            "Required / 5min": req_5m,
+            "Note": note
+        })
+
+    df_targets = pd.DataFrame(targets_rows_for_df)
 
     bio = BytesIO()
     with pd.ExcelWriter(bio, engine="openpyxl") as writer:
-        df.to_excel(writer, index=False, sheet_name="Views")
+        df_views.to_excel(writer, index=False, sheet_name="Views")
+        # Only create Targets sheet if targets exist
+        if not df_targets.empty:
+            df_targets.to_excel(writer, index=False, sheet_name="Targets")
     bio.seek(0)
 
     safe = "".join(c for c in name if c.isalnum() or c in " _-").rstrip()
