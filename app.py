@@ -197,7 +197,7 @@ def interpolate_views_at(rows_asc: list[dict], target_ts: datetime) -> Optional[
         if r["ts_utc"] < target_ts:
             prev = r
             continue
-        # r.ts_utc > = target_ts
+        # r.ts_utc >= target_ts
         if r["ts_utc"] > target_ts and prev is not None:
             t0 = prev["ts_utc"].timestamp()
             v0 = float(prev["views"])
@@ -207,7 +207,7 @@ def interpolate_views_at(rows_asc: list[dict], target_ts: datetime) -> Optional[
                 return v1
             frac = (target_ts.timestamp() - t0) / (t1 - t0)
             return v0 + frac * (v1 - v0)
-        # if prev is None and r.ts_utc >= target_ts -> target is before first sample
+        # prev is None and r.ts_utc >= target_ts -> target before first sample
         if prev is None:
             return None
     # target after last sample -> None
@@ -219,7 +219,7 @@ def process_gains(rows_asc: list[dict]):
     Input: rows ascending by ts_utc.
     Output: list of tuples:
       (ts_ist_str, views, gain_5min, hourly_gain, gain_24h)
-    24h gain uses interpolation when needed.
+    24h gain uses interpolation when possible, otherwise falls back to latest <= target.
     """
     out = []
     for i, r in enumerate(rows_asc):
@@ -237,11 +237,10 @@ def process_gains(rows_asc: list[dict]):
                 break
         hourly = None if ref_idx_h is None else (views - rows_asc[ref_idx_h]["views"])
 
-        # 24h: prefer interpolation using available asc rows
+        # 24h: try interpolation first, fallback to latest <= target
         target_d = ts_utc - timedelta(days=1)
         interp = interpolate_views_at(rows_asc, target_d)
         if interp is None:
-            # fallback: use latest row <= target_d
             ref_idx_d = None
             for j in range(i, -1, -1):
                 if rows_asc[j]["ts_utc"] <= target_d:
@@ -323,51 +322,60 @@ def index():
         for v in videos:
             vid = v["video_id"]
 
-            # ---- daily data and %change (now with interpolation 24h) ----
-            cur.execute(
-                "SELECT DISTINCT date_ist FROM views WHERE video_id=%s ORDER BY date_ist DESC", (vid,)
-            )
-            dates = [r["date_ist"] for r in cur.fetchall()]
-            date_to_processed, date_to_time_map = {}, {}
+            # ---------- FIX: fetch ALL rows for this video and process once ----------
+            cur.execute("SELECT ts_utc, views FROM views WHERE video_id=%s ORDER BY ts_utc ASC", (vid,))
+            all_rows = cur.fetchall()  # chronological ascending
 
-            for d in dates:
-                cur.execute(
-                    "SELECT ts_utc, views FROM views WHERE video_id=%s AND date_ist=%s ORDER BY ts_utc ASC",
-                    (vid, d),
-                )
-                asc_rows = cur.fetchall()
-                if not asc_rows:
-                    continue
-                processed = process_gains(asc_rows)  # tuples: ts, views, gain5, hourly, gain24
-                date_to_processed[d] = processed
-                date_to_time_map[d] = {tpl[0].split(" ")[1]: tpl for tpl in processed}
+            if not all_rows:
+                daily = {}
+            else:
+                processed_all = process_gains(all_rows)  # list of (ts_ist, views, gain5, hourly, gain24)
 
-            daily = {}
-            for d in dates:
-                if d not in date_to_processed:
-                    continue
-                processed = date_to_processed[d]
-                prev_date = d - timedelta(days=1)
-                prev_map = date_to_time_map.get(prev_date, {})
-                display_rows = []
-                for tpl in processed:
-                    ts_ist, views, gain_5min, hourly_gain, gain_24h = tpl
-                    time_part = ts_ist.split(" ")[1]
-                    prev_tpl = prev_map.get(time_part)
-                    prev_hourly = prev_tpl[3] if prev_tpl else None
+                # group processed rows by IST date string "YYYY-MM-DD"
+                grouped = {}
+                date_time_map = {}
+                for tpl in processed_all:
+                    ts_ist = tpl[0]  # "YYYY-MM-DD HH:MM:SS"
+                    date_str, time_part = ts_ist.split(" ")
+                    grouped.setdefault(date_str, []).append(tpl)
+                    date_time_map.setdefault(date_str, {})[time_part] = tpl
 
-                    pct = None
-                    if prev_hourly not in (None, 0):
-                        pct = round(((hourly_gain or 0) - prev_hourly) / prev_hourly * 100, 2)
+                # newest dates first
+                dates_sorted = sorted(grouped.keys(), reverse=True)
+                daily = {}
+                for date_str in dates_sorted:
+                    processed = grouped[date_str]  # chronological order within group
+                    prev_date_obj = (datetime.fromisoformat(date_str).date() - timedelta(days=1))
+                    prev_date_str = prev_date_obj.isoformat()
+                    prev_map = date_time_map.get(prev_date_str, {})
 
-                    # row: ts, views, gain5, hourly, gain24, pct
-                    display_rows.append((ts_ist, views, gain_5min, hourly_gain, gain_24h, pct))
-                daily[d.strftime("%Y-%m-%d")] = list(reversed(display_rows))
+                    display_rows = []
+                    for tpl in processed:
+                        ts_ist, views, gain_5min, hourly_gain, gain_24h = tpl
+                        time_part = ts_ist.split(" ")[1]
+                        prev_tpl = prev_map.get(time_part)
+                        prev_hourly = prev_tpl[3] if prev_tpl else None
 
-            # ---- latest stats ----
-            cur.execute("SELECT ts_utc, views FROM views WHERE video_id=%s ORDER BY ts_utc DESC LIMIT 1", (vid,))
-            lr = cur.fetchone()
-            latest_views, latest_ts = (lr["views"], lr["ts_utc"]) if lr else (None, None)
+                        pct = None
+                        if prev_hourly not in (None, 0):
+                            try:
+                                pct = round(((hourly_gain or 0) - prev_hourly) / prev_hourly * 100, 2)
+                            except Exception:
+                                pct = None
+
+                        display_rows.append((ts_ist, views, gain_5min, hourly_gain, gain_24h, pct))
+
+                    # newest-first for display
+                    daily[date_str] = list(reversed(display_rows))
+            # ---------- end fix ----------
+
+            # ---- latest stats (use last processed value if exists) ----
+            latest_views = None
+            latest_ts = None
+            if all_rows:
+                last_row = all_rows[-1]
+                latest_views = last_row["views"]
+                latest_ts = last_row["ts_utc"]
 
             # ---- targets ----
             cur.execute("SELECT id, target_views, target_ts, note FROM targets WHERE video_id=%s ORDER BY target_ts ASC", (vid,))
@@ -578,7 +586,6 @@ def export_video(video_id):
         t_ts = t["target_ts"]
         note = t["note"]
         # compute required figures similar to index()
-        # get latest views (last processed row)
         latest_views = processed[-1][1] if processed else None
         remaining_views = t_views - (latest_views or 0)
         remaining_seconds = (t_ts - nowu).total_seconds()
@@ -612,7 +619,6 @@ def export_video(video_id):
     bio = BytesIO()
     with pd.ExcelWriter(bio, engine="openpyxl") as writer:
         df_views.to_excel(writer, index=False, sheet_name="Views")
-        # Only create Targets sheet if targets exist
         if not df_targets.empty:
             df_targets.to_excel(writer, index=False, sheet_name="Targets")
     bio.seek(0)
