@@ -2,10 +2,12 @@ import os
 import threading
 import logging
 import time
+import math
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from urllib.parse import urlparse, parse_qs
 from zoneinfo import ZoneInfo
+from typing import Optional
 
 import pandas as pd
 from flask import (
@@ -49,6 +51,7 @@ if API_KEY:
 _db = None
 _db_lock = threading.Lock()
 
+
 def db():
     global _db
     with _db_lock:
@@ -64,6 +67,7 @@ def db():
             )
         return _db
 
+
 def init_db():
     """Schema: store timestamps in UTC (timestamptz). Compute IST date on insert."""
     conn = db()
@@ -78,15 +82,26 @@ def init_db():
         cur.execute("""
         CREATE TABLE IF NOT EXISTS views (
           video_id  TEXT NOT NULL,
-          ts_utc    TIMESTAMPTZ NOT NULL,   -- canonical storage in UTC
-          date_ist  DATE NOT NULL,          -- convenience for day grouping
+          ts_utc    TIMESTAMPTZ NOT NULL,
+          date_ist  DATE NOT NULL,
           views     BIGINT NOT NULL,
           likes     BIGINT,
           PRIMARY KEY (video_id, ts_utc),
           FOREIGN KEY (video_id) REFERENCES video_list(video_id) ON DELETE CASCADE
         );
         """)
+        # new: targets table
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS targets (
+          id           SERIAL PRIMARY KEY,
+          video_id     TEXT NOT NULL REFERENCES video_list(video_id) ON DELETE CASCADE,
+          target_views BIGINT NOT NULL,
+          target_ts    TIMESTAMPTZ NOT NULL,
+          note         TEXT
+        );
+        """)
     log.info("DB schema ready.")
+
 
 # -----------------------------
 # YouTube helpers
@@ -108,6 +123,7 @@ def extract_video_id(link: str) -> str | None:
     except Exception:
         return None
 
+
 def fetch_title(video_id: str) -> str:
     if not YOUTUBE:
         return "Unknown"
@@ -122,13 +138,14 @@ def fetch_title(video_id: str) -> str:
         log.exception("Title fetch error: %s", e)
         return "Unknown"
 
+
 def fetch_stats_batch(video_ids: list[str]) -> dict:
     if not YOUTUBE or not video_ids:
         return {}
     out = {}
     try:
         for i in range(0, len(video_ids), 50):
-            chunk = video_ids[i:i+50]
+            chunk = video_ids[i:i + 50]
             r = YOUTUBE.videos().list(part="statistics", id=",".join(chunk), maxResults=50).execute()
             for it in r.get("items", []):
                 vid = it["id"]
@@ -143,16 +160,15 @@ def fetch_stats_batch(video_ids: list[str]) -> dict:
         log.exception("Stats fetch error: %s", e)
     return out
 
+
 # -----------------------------
 # Storage helpers
 # -----------------------------
 def now_utc():
     return datetime.now(timezone.utc).replace(microsecond=0)
 
+
 def safe_store(video_id: str, stats: dict):
-    """
-    Store a sample at second precision. UTC in DB, IST date computed.
-    """
     tsu = now_utc()
     date_ist = tsu.astimezone(IST).date()
     conn = db()
@@ -163,18 +179,15 @@ def safe_store(video_id: str, stats: dict):
             (video_id, tsu, date_ist, int(stats.get("views", 0)), stats.get("likes"))
         )
 
-def process_gains(rows_asc: list[dict]) -> list[tuple[str, int, int | None, int | None]]:
-    """
-    Input: rows ascending by ts_utc (chronological).
-    Output rows (still chronological) with (ts_ist_str, views, gain_5min, hourly_gain).
-    """
+
+def process_gains(rows_asc: list[dict]):
     out = []
     for i, r in enumerate(rows_asc):
         ts_ist = r["ts_utc"].astimezone(IST).strftime("%Y-%m-%d %H:%M:%S")
         views = r["views"]
-        gain = None if i == 0 else views - rows_asc[i-1]["views"]
+        gain = None if i == 0 else views - rows_asc[i - 1]["views"]
 
-        # hourly gain vs latest row <= ts - 1h
+        # hourly gain
         target = r["ts_utc"] - timedelta(hours=1)
         ref_idx = None
         for j in range(i, -1, -1):
@@ -185,11 +198,13 @@ def process_gains(rows_asc: list[dict]) -> list[tuple[str, int, int | None, int 
         out.append((ts_ist, views, gain, hourly))
     return out
 
+
 # -----------------------------
 # Background sampler
 # -----------------------------
 _sampler_started = False
 _sampler_lock = threading.Lock()
+
 
 def sleep_until_next_5min_IST():
     now_ist = datetime.now(IST).replace(microsecond=0)
@@ -199,6 +214,7 @@ def sleep_until_next_5min_IST():
     else:
         next_tick = now_ist.replace(minute=next_min, second=0)
     time.sleep(max(1, (next_tick - now_ist).total_seconds()))
+
 
 def sampler_loop():
     log.info("Sampler loop started (aligned to IST 5-min).")
@@ -220,6 +236,7 @@ def sampler_loop():
             log.exception("Sampler error: %s", e)
             time.sleep(5)
 
+
 def start_background():
     global _sampler_started
     with _sampler_lock:
@@ -229,12 +246,14 @@ def start_background():
             _sampler_started = True
             log.info("Background sampler started.")
 
+
 # -----------------------------
 # Routes
 # -----------------------------
 @app.get("/healthz")
 def healthz():
     return "ok", 200
+
 
 @app.get("/")
 def index():
@@ -247,73 +266,93 @@ def index():
     with conn.cursor() as cur:
         for v in videos:
             vid = v["video_id"]
-            # latest dates first
-            cur.execute(
-                "SELECT DISTINCT date_ist FROM views WHERE video_id=%s ORDER BY date_ist DESC",
-                (vid,)
-            )
-            dates = [r["date_ist"] for r in cur.fetchall()]  # list of date objects, desc
 
-            # Build processed data per date (chronological inside each date)
-            date_to_processed = {}  # date_obj -> list of tuples (ts_ist, views, gain_5min, hourly_gain)
-            date_to_time_map = {}   # date_obj -> { "HH:MM:SS" -> (ts_ist, views, gain_5min, hourly_gain) }
+            # ---- daily data and %change (same as before) ----
+            cur.execute(
+                "SELECT DISTINCT date_ist FROM views WHERE video_id=%s ORDER BY date_ist DESC", (vid,)
+            )
+            dates = [r["date_ist"] for r in cur.fetchall()]
+            date_to_processed, date_to_time_map = {}, {}
 
             for d in dates:
                 cur.execute(
                     "SELECT ts_utc, views FROM views WHERE video_id=%s AND date_ist=%s ORDER BY ts_utc ASC",
-                    (vid, d)
+                    (vid, d),
                 )
                 asc_rows = cur.fetchall()
                 if not asc_rows:
                     continue
-                processed = process_gains(asc_rows)  # list of (ts_ist, views, gain, hourly) chronological
+                processed = process_gains(asc_rows)
                 date_to_processed[d] = processed
+                date_to_time_map[d] = {tpl[0].split(" ")[1]: tpl for tpl in processed}
 
-                # map by clock time for easy 24h lookup (use IST time portion)
-                time_map = {}
-                for tpl in processed:
-                    ts_ist = tpl[0]  # "YYYY-MM-DD HH:MM:SS"
-                    time_part = ts_ist.split(" ")[1]
-                    time_map[time_part] = tpl
-                date_to_time_map[d] = time_map
-
-            # Now compute percent change vs same clock-time previous day using 'hourly' field
-            # We'll produce display-ready lists (newest first per date) where each row is:
-            # (ts_ist, views, gain_5min, hourly_gain, pct_vs_prev_day)
             daily = {}
             for d in dates:
                 if d not in date_to_processed:
                     continue
                 processed = date_to_processed[d]
-                display_rows = []
                 prev_date = d - timedelta(days=1)
                 prev_map = date_to_time_map.get(prev_date, {})
-
+                display_rows = []
                 for tpl in processed:
                     ts_ist, views, gain_5min, hourly_gain = tpl
-                    time_part = ts_ist.split(" ")[1]
-                    prev_tpl = prev_map.get(time_part)
-                    prev_hourly = prev_tpl[3] if prev_tpl is not None else None
-
+                    prev_tpl = prev_map.get(ts_ist.split(" ")[1])
+                    prev_hourly = prev_tpl[3] if prev_tpl else None
                     pct = None
-                    # compute percent change only when previous hourly is not None and not zero
                     if prev_hourly not in (None, 0):
-                        try:
-                            pct = round(((hourly_gain or 0) - prev_hourly) / prev_hourly * 100, 2)
-                        except Exception:
-                            pct = None
-
-                    # add tuple for front-end. newest first expected, so we'll reverse later
+                        pct = round(((hourly_gain or 0) - prev_hourly) / prev_hourly * 100, 2)
                     display_rows.append((ts_ist, views, gain_5min, hourly_gain, pct))
-
-                # newest first for display (your template expects newest first)
                 daily[d.strftime("%Y-%m-%d")] = list(reversed(display_rows))
+
+            # ---- latest stats ----
+            cur.execute("SELECT ts_utc, views FROM views WHERE video_id=%s ORDER BY ts_utc DESC LIMIT 1", (vid,))
+            lr = cur.fetchone()
+            latest_views, latest_ts = (lr["views"], lr["ts_utc"]) if lr else (None, None)
+
+            # ---- targets ----
+            cur.execute("SELECT id, target_views, target_ts, note FROM targets WHERE video_id=%s ORDER BY target_ts ASC", (vid,))
+            target_rows = cur.fetchall()
+            nowu = now_utc()
+            targets_display = []
+
+            for t in target_rows:
+                tid, t_views, t_ts, note = t["id"], t["target_views"], t["target_ts"], t["note"]
+                remaining_views = (t_views - (latest_views or 0))
+                remaining_seconds = (t_ts - nowu).total_seconds()
+
+                if remaining_views <= 0:
+                    status = "reached"
+                    req_hr = req_5m = 0
+                elif remaining_seconds <= 0:
+                    status = "overdue"
+                    req_hr = math.ceil(remaining_views)
+                    req_5m = math.ceil(req_hr / 12)
+                else:
+                    status = "active"
+                    hrs = max(remaining_seconds / 3600.0, 1/3600)
+                    req_hr = math.ceil(remaining_views / hrs)
+                    req_5m = math.ceil(req_hr / 12)
+
+                targets_display.append({
+                    "id": tid,
+                    "target_views": t_views,
+                    "target_ts_ist": t_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S"),
+                    "note": note,
+                    "status": status,
+                    "required_per_hour": req_hr,
+                    "required_per_5min": req_5m,
+                    "remaining_views": remaining_views,
+                    "remaining_seconds": int(remaining_seconds)
+                })
 
             enriched.append({
                 "video_id": vid,
                 "name": v["name"],
                 "is_tracking": bool(v["is_tracking"]),
-                "daily_data": daily
+                "daily_data": daily,
+                "targets": targets_display,
+                "latest_views": latest_views,
+                "latest_ts": latest_ts
             })
     return render_template("index.html", videos=enriched)
 
@@ -332,7 +371,7 @@ def add_video():
     title = fetch_title(video_id)
     stats = fetch_stats_batch([video_id]).get(video_id)
     if not stats:
-        flash("Could not fetch stats (check API key/quota/video).", "danger")
+        flash("Could not fetch stats.", "danger")
         return redirect(url_for("index"))
 
     conn = db()
@@ -343,9 +382,46 @@ def add_video():
             ON CONFLICT (video_id) DO UPDATE SET name=EXCLUDED.name, is_tracking=TRUE
         """, (video_id, title))
     safe_store(video_id, stats)
-
     flash(f"Now tracking: {title}", "success")
     return redirect(url_for("index"))
+
+
+@app.post("/add_target/<video_id>")
+def add_target(video_id):
+    tv = request.form.get("target_views", "").strip()
+    tts = request.form.get("target_ts", "").strip()
+    note = (request.form.get("note") or "").strip()
+    if not tv or not tts:
+        flash("Fill target views and target time.", "warning")
+        return redirect(url_for("index"))
+    try:
+        target_views = int(tv)
+        local_dt = datetime.fromisoformat(tts)
+        target_ts_utc = local_dt.replace(tzinfo=IST).astimezone(timezone.utc)
+    except Exception:
+        flash("Invalid input.", "danger")
+        return redirect(url_for("index"))
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO targets (video_id, target_views, target_ts, note) VALUES (%s, %s, %s, %s)",
+                    (video_id, target_views, target_ts_utc, note))
+    flash("Target added.", "success")
+    return redirect(url_for("index"))
+
+
+@app.get("/remove_target/<int:target_id>")
+def remove_target(target_id):
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("SELECT video_id FROM targets WHERE id=%s", (target_id,))
+        r = cur.fetchone()
+        if not r:
+            flash("Target not found.", "warning")
+            return redirect(url_for("index"))
+        cur.execute("DELETE FROM targets WHERE id=%s", (target_id,))
+    flash("Target removed.", "info")
+    return redirect(url_for("index"))
+
 
 @app.get("/stop_tracking/<video_id>")
 def stop_tracking(video_id):
@@ -361,6 +437,7 @@ def stop_tracking(video_id):
         flash(("Resumed" if new_state else "Paused") + f" tracking: {row['name']}", "info")
     return redirect(url_for("index"))
 
+
 @app.get("/remove_video/<video_id>")
 def remove_video(video_id):
     conn = db()
@@ -375,6 +452,7 @@ def remove_video(video_id):
         cur.execute("DELETE FROM video_list WHERE video_id=%s", (video_id,))
         flash(f"Removed '{name}' and all data.", "success")
     return redirect(url_for("index"))
+
 
 @app.get("/export/<video_id>")
 def export_video(video_id):
