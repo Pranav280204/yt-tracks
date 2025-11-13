@@ -7,7 +7,7 @@
   <!-- Bootstrap -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
-    :root {
+    :root{
       --accent-blue:#e9f3ff;
       --accent-green:#e9f9f0;
       --accent-red:#ffecec;
@@ -15,242 +15,326 @@
       --muted:#5b5b5b;
       --border:#e6e6e6;
     }
-    body { background:#fff; color:var(--text-dark); }
-    .card { background:#fff; border:1px solid var(--border); }
-    .badge.paused { background:#adb5bd; }
-    .gain-pos { background:var(--accent-green); padding:.1rem .4rem; border-radius:.25rem; display:inline-block; }
-    .gain-neg { background:var(--accent-red); padding:.1rem .4rem; border-radius:.25rem; display:inline-block; }
-    .gain-null { color:var(--muted); }
-    .muted { color:var(--muted); }
-    .tab-btn { border:1px solid var(--border); background:#fff; }
-    .tab-btn.active { background:var(--accent-blue); }
-    .table thead th { color:#222; }
-    .btn-outline-light { border-color:var(--border); }
-    .pct-small { font-weight:600; font-size:.95rem; }
-    .pct-arrow { margin-right:.25rem; font-size:.85rem; vertical-align:middle; }
+    body{ background:#ffffff; color:var(--text-dark); }
+    .card{ background:#fff; border:1px solid var(--border); }
+    .sidebar { height: calc(100vh - 120px); overflow-y: auto; padding: .5rem; border-right:1px solid var(--border); background:#fbfcfe; position:sticky; top:16px; }
+    .detail-pane { height: calc(100vh - 120px); overflow-y: auto; padding: .5rem; }
+    .video-item { cursor:pointer; padding:.5rem .6rem; border-radius:.35rem; }
+    .video-item:hover { background:#f1f6ff; }
+    .video-item.active { background:var(--accent-blue); }
+    .gain-pos{ background:var(--accent-green); padding:.1rem .4rem; border-radius:.25rem;}
+    .gain-neg{ background:var(--accent-red); padding:.1rem .4rem; border-radius:.25rem;}
+    .gain-null{ color:var(--muted); }
+    .muted{ color:var(--muted); }
+    .tab-btn{ border:1px solid var(--border); background:#fff; }
+    .tab-btn.active{ background:var(--accent-blue); }
+    .table thead th{ color:#222; position: sticky; top: 0; background: #fff; z-index: 2; } /* keep headers visible inside scroll */
+    .small-controls { gap:.5rem; display:flex; align-items:center; }
+    .search-input { width:100%; }
+    .card-scroll { max-height: calc(100vh - 320px); overflow-y:auto; padding-right: 8px; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", "Courier New", monospace; }
     .target-card { background:#f8f9fa; border:1px solid var(--border); border-radius:.5rem; padding:.5rem .75rem; margin-bottom:.5rem; }
+    @media (max-width: 991px) {
+      .sidebar { position: static; height: auto; border-right: none; }
+      .detail-pane { height: auto; }
+    }
   </style>
 </head>
 <body>
-<div class="container py-4">
-  <h1 class="mb-2">📈 YouTube Views Tracker</h1>
-  <p class="muted">All timestamps shown in IST (Asia/Kolkata). Samples every 5 minutes (00, 05, 10, …).</p>
+<div class="container-fluid py-3">
+  <div class="d-flex align-items-center mb-2">
+    <h1 class="me-3 mb-0">📈 YouTube Views Tracker</h1>
+    <p class="muted mb-0">All timestamps shown in IST. Samples every 5 minutes.</p>
+  </div>
 
-  <!-- Alerts -->
-  {% with messages = get_flashed_messages(with_categories=true) %}
-    {% if messages %}
-      <div class="mt-2">
-        {% for category, message in messages %}
-          <div class="alert alert-{{ 'secondary' if category=='info' else category }} alert-dismissible fade show" role="alert">
-            {{ message }}
-            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-          </div>
-        {% endfor %}
+  <div class="row g-3">
+    <!-- LEFT: Sidebar -->
+    <div class="col-lg-3 col-md-4">
+      <div class="card sidebar">
+        <div class="d-flex mb-2">
+          <input id="videoSearch" class="form-control search-input" placeholder="Search videos (name or id)">
+          <button id="clearSearch" class="btn btn-light ms-2" title="Clear">✕</button>
+        </div>
+
+        <div class="small-controls mb-2">
+          <button id="expandAllBtn" class="btn btn-sm btn-outline-secondary">Expand All</button>
+          <button id="collapseAllBtn" class="btn btn-sm btn-outline-secondary">Collapse All</button>
+          <a class="btn btn-sm btn-outline-primary ms-auto" href="{{ url_for('export_video', video_id=videos[0].video_id) if videos else '#' }}" id="exportFirst">Export first</a>
+        </div>
+
+        <div id="videoList">
+          {% if videos|length == 0 %}
+            <div class="muted">No videos yet. Add one above on the main page.</div>
+          {% else %}
+            {% for v in videos %}
+              <div class="video-item" data-video-id="{{ v.video_id }}" data-index="{{ loop.index0 }}">
+                <div class="d-flex justify-content-between">
+                  <div style="flex:1;">
+                    <div class="fw-semibold">{{ v.name }}</div>
+                    <div class="muted small mono">{{ v.video_id }}</div>
+                  </div>
+                  <div class="text-end">
+                    {% if not v.is_tracking %}
+                      <div class="badge paused">Paused</div>
+                    {% endif %}
+                    <div class="muted small">{{ v.latest_views|default('', true) and '{:,}'.format(v.latest_views) or '' }}</div>
+                  </div>
+                </div>
+              </div>
+            {% endfor %}
+          {% endif %}
+        </div>
       </div>
-    {% endif %}
-  {% endwith %}
+    </div>
 
-  <!-- Add Video -->
-  <div class="card mb-4">
-    <div class="card-body">
-      <form class="row g-2" method="POST" action="{{ url_for('add_video') }}">
-        <div class="col-12 col-md-9">
-          <input class="form-control" type="url" name="link" placeholder="Paste any YouTube link (youtube.com or youtu.be)" required>
-        </div>
-        <div class="col-12 col-md-3 d-grid">
-          <button class="btn btn-primary" type="submit">Add & Start Tracking</button>
-        </div>
-      </form>
+    <!-- RIGHT: Detail Pane -->
+    <div class="col-lg-9 col-md-8">
+      <div class="card detail-pane">
+        {% if videos|length == 0 %}
+          <div class="p-3 muted">No videos to show. Add a video to start tracking.</div>
+        {% else %}
+          <!-- Render all video detail cards but show only the selected one via JS -->
+          {% for v in videos %}
+            <div class="video-detail-card mb-3" id="video-card-{{ v.video_id }}" data-video-id="{{ v.video_id }}" style="display: {{ 'block' if loop.first else 'none' }};">
+              <div class="card-body">
+                <div class="d-flex align-items-start justify-content-between mb-2">
+                  <div>
+                    <h4 class="mb-1">{{ v.name }}</h4>
+                    <div class="muted small mono">{{ v.video_id }}</div>
+                  </div>
+                  <div class="text-end">
+                    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('export_video', video_id=v.video_id) }}">Export</a>
+                    <a class="btn btn-sm btn-outline-warning" href="{{ url_for('stop_tracking', video_id=v.video_id) }}">
+                      {% if v.is_tracking %}Pause{% else %}Resume{% endif %}
+                    </a>
+                    <a class="btn btn-sm btn-outline-danger" href="{{ url_for('remove_video', video_id=v.video_id) }}" onclick="return confirm('Delete this video and ALL its data?')">Remove</a>
+                  </div>
+                </div>
+
+                <!-- Targets collapse -->
+                <div class="mb-3">
+                  <h6 class="mb-2">🎯 Targets</h6>
+                  {% if v.targets|length == 0 %}
+                    <p class="muted mb-2">No targets yet.</p>
+                  {% endif %}
+                  <div>
+                    {% for t in v.targets %}
+                      <div class="target-card d-flex justify-content-between align-items-center">
+                        <div>
+                          <strong>{{ "{:,}".format(t.target_views) }}</strong>
+                          <small class="muted">by {{ t.target_ts_ist }}</small>
+                          {% if t.note %}<div class="muted small">{{ t.note }}</div>{% endif %}
+                        </div>
+                        <div class="text-end">
+                          {% if t.status == 'reached' %}
+                            <div class="badge bg-success">Reached</div>
+                          {% elif t.status == 'overdue' %}
+                            <div class="badge bg-danger">Overdue</div>
+                          {% else %}
+                            <div class="muted small">Remaining: {{ "{:,}".format(t.remaining_views) }}</div>
+                            <div class="mono">Req/hr: {{ "{:,}".format(t.required_per_hour) }} • 5min: {{ "{:,}".format(t.required_per_5min) }}</div>
+                          {% endif %}
+                          <div class="mt-1">
+                            <a class="btn btn-sm btn-outline-danger" href="{{ url_for('remove_target', target_id=t.id) }}" onclick="return confirm('Remove this target?')">Remove</a>
+                          </div>
+                        </div>
+                      </div>
+                    {% endfor %}
+                  </div>
+
+                  <!-- Add Target Form -->
+                  <form class="row g-2 mt-2" method="POST" action="{{ url_for('add_target', video_id=v.video_id) }}">
+                    <div class="col-12 col-md-3">
+                      <input class="form-control" name="target_views" type="number" min="1" placeholder="Target views" required>
+                    </div>
+                    <div class="col-12 col-md-4">
+                      <input class="form-control" name="target_ts" type="datetime-local" required>
+                    </div>
+                    <div class="col-12 col-md-4">
+                      <input class="form-control" name="note" placeholder="Optional note" maxlength="200">
+                    </div>
+                    <div class="col-12 col-md-1 d-grid">
+                      <button class="btn btn-primary btn-sm" type="submit">Add</button>
+                    </div>
+                  </form>
+                </div>
+
+                <!-- Data tables in a scrollable box -->
+                <div class="card-scroll border-top pt-2">
+                  {% if v.daily_data|length == 0 %}
+                    <p class="muted">No samples yet. First snapshot will appear after next tick.</p>
+                  {% else %}
+                    <div class="mb-2 d-flex flex-wrap gap-2 align-items-center">
+                      <div class="muted small me-2">Days:</div>
+                      {% set first_d = True %}
+                      {% for d, rows in v.daily_data.items() %}
+                        <button class="btn btn-sm tab-btn day-toggle {% if first_d %}active{% endif %}" data-target="#panel-{{ v.video_id }}-{{ loop.index }}">{{ d }}</button>
+                        {% set first_d = False %}
+                      {% endfor %}
+                      <div class="ms-auto muted small">Click day to show/hide its table</div>
+                    </div>
+
+                    {% set first_table = True %}
+                    {% for d, rows in v.daily_data.items() %}
+                      <div class="mb-3 day-panel" id="panel-{{ v.video_id }}-{{ loop.index }}" style="display: {{ 'block' if first_table else 'none' }};">
+                        <div class="table-responsive">
+                          <table class="table table-sm align-middle">
+                            <thead>
+                              <tr>
+                                <th>Time (IST)</th>
+                                <th>Total Views</th>
+                                <th>Gain (5 min)</th>
+                                <th>Hourly Growth</th>
+                                <th>24h Gain</th>
+                                <th>Change 24h vs prev day (%)</th>
+                                <th>Projected EOD</th>
+                                <th>Min reach (prev 23:55 gain scaled + prev 11:55 views)</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {% for ts, views, gain, hourly, gain24, pct24, proj_eod, min_reach in rows %}
+                                <tr>
+                                  <td class="mono">{{ ts }}</td>
+                                  <td class="mono">{{ "{:,}".format(views) }}</td>
+                                  <td>
+                                    {% if gain is none %}
+                                      <span class="gain-null">—</span>
+                                    {% elif gain >= 0 %}
+                                      <span class="gain-pos">+{{ "{:,}".format(gain) }}</span>
+                                    {% else %}
+                                      <span class="gain-neg">{{ "{:,}".format(gain) }}</span>
+                                    {% endif %}
+                                  </td>
+                                  <td>
+                                    {% if hourly is none %}
+                                      <span class="gain-null">—</span>
+                                    {% elif hourly >= 0 %}
+                                      <span class="gain-pos">+{{ "{:,}".format(hourly) }}</span>
+                                    {% else %}
+                                      <span class="gain-neg">{{ "{:,}".format(hourly) }}</span>
+                                    {% endif %}
+                                  </td>
+                                  <td>
+                                    {% if gain24 is none %}
+                                      <span class="gain-null">—</span>
+                                    {% elif gain24 >= 0 %}
+                                      <span class="gain-pos">+{{ "{:,}".format(gain24) }}</span>
+                                    {% else %}
+                                      <span class="gain-neg">{{ "{:,}".format(gain24) }}</span>
+                                    {% endif %}
+                                  </td>
+                                  <td>
+                                    {% if pct24 is none %}
+                                      <span class="gain-null">—</span>
+                                    {% elif pct24 > 0 %}
+                                      <span class="gain-pos">+{{ ('{:.2f}'.format(pct24)) }}%</span>
+                                    {% elif pct24 < 0 %}
+                                      <span class="gain-neg">{{ ('{:.2f}'.format(pct24)) }}%</span>
+                                    {% else %}
+                                      0.00%
+                                    {% endif %}
+                                  </td>
+                                  <td class="mono">
+                                    {% if proj_eod is none %}
+                                      <span class="gain-null">—</span>
+                                    {% else %}
+                                      {{ "{:,}".format(proj_eod) }}
+                                    {% endif %}
+                                  </td>
+                                  <td class="mono">
+                                    {% if min_reach is none %}
+                                      <span class="gain-null">—</span>
+                                    {% else %}
+                                      {{ "{:,}".format(min_reach) }}
+                                    {% endif %}
+                                  </td>
+                                </tr>
+                              {% endfor %}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                      {% set first_table = False %}
+                    {% endfor %}
+                  {% endif %}
+                </div>
+
+              </div>
+            </div>
+          {% endfor %}
+        {% endif %}
+      </div>
     </div>
   </div>
 
-  {% if videos|length == 0 %}
-    <p class="muted">No videos yet. Add a link above to begin.</p>
-  {% endif %}
-
-  <div class="row g-3">
-    {% for v in videos %}
-      <div class="col-12">
-        <div class="card">
-          <div class="card-body">
-            <div class="d-flex align-items-center justify-content-between flex-wrap">
-              <h4 class="mb-2">
-                {{ v.name }}
-                {% if not v.is_tracking %}
-                  <span class="badge paused ms-2">Paused</span>
-                {% endif %}
-              </h4>
-              <div class="mb-2 d-flex gap-2">
-                <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('export_video', video_id=v.video_id) }}">Export</a>
-                <a class="btn btn-sm btn-outline-warning" href="{{ url_for('stop_tracking', video_id=v.video_id) }}">
-                  {% if v.is_tracking %}Pause{% else %}Resume{% endif %}
-                </a>
-                <a class="btn btn-sm btn-outline-danger" href="{{ url_for('remove_video', video_id=v.video_id) }}" onclick="return confirm('Delete this video and ALL its data?')">Remove</a>
-              </div>
-            </div>
-
-            <!-- Targets -->
-            <div class="mb-3">
-              <h6 class="mb-2">🎯 Targets</h6>
-              {% if v.targets|length == 0 %}
-                <p class="muted mb-2">No targets yet. Add one below.</p>
-              {% else %}
-                {% for t in v.targets %}
-                  <div class="target-card d-flex justify-content-between align-items-center">
-                    <div>
-                      <strong>{{ "{:,}".format(t.target_views) }}</strong>
-                      <small class="muted">by {{ t.target_ts_ist }}</small>
-                      {% if t.note %}<div class="muted small">{{ t.note }}</div>{% endif %}
-                    </div>
-                    <div class="text-end">
-                      {% if t.status == 'reached' %}
-                        <div class="badge bg-success">Reached</div>
-                      {% elif t.status == 'overdue' %}
-                        <div class="badge bg-danger">Overdue</div>
-                      {% else %}
-                        <div class="muted small">Remaining: {{ "{:,}".format(t.remaining_views) }}</div>
-                        <div class="mono">Req/hr: {{ "{:,}".format(t.required_per_hour) }} • 5min: {{ "{:,}".format(t.required_per_5min) }}</div>
-                      {% endif %}
-                      <div class="mt-1">
-                        <a class="btn btn-sm btn-outline-danger" href="{{ url_for('remove_target', target_id=t.id) }}" onclick="return confirm('Remove this target?')">Remove</a>
-                      </div>
-                    </div>
-                  </div>
-                {% endfor %}
-              {% endif %}
-
-              <!-- Add Target Form -->
-              <form class="row g-2" method="POST" action="{{ url_for('add_target', video_id=v.video_id) }}">
-                <div class="col-12 col-md-3">
-                  <input class="form-control" name="target_views" type="number" min="1" placeholder="Target views" required>
-                </div>
-                <div class="col-12 col-md-4">
-                  <input class="form-control" name="target_ts" type="datetime-local" required>
-                </div>
-                <div class="col-12 col-md-4">
-                  <input class="form-control" name="note" placeholder="Optional note (e.g. campaign end)" maxlength="200">
-                </div>
-                <div class="col-12 col-md-1 d-grid">
-                  <button class="btn btn-primary btn-sm" type="submit">Add</button>
-                </div>
-              </form>
-            </div>
-
-            {% if v.daily_data|length == 0 %}
-              <p class="muted mb-0">No samples yet. First snapshot will appear after next tick.</p>
-            {% else %}
-              <div class="mb-3 d-flex flex-wrap gap-2">
-                {% set first = True %}
-                {% for d, rows in v.daily_data.items() %}
-                  <button class="btn btn-sm tab-btn {% if first %}active{% endif %}" data-bs-toggle="collapse" data-bs-target="#pane-{{ v.video_id }}-{{ loop.index }}" aria-expanded="{{ 'true' if first else 'false' }}">{{ d }}</button>
-                  {% set first = False %}
-                {% endfor %}
-              </div>
-
-              {% set first = True %}
-              {% for d, rows in v.daily_data.items() %}
-                <div id="pane-{{ v.video_id }}-{{ loop.index }}" class="collapse {% if first %}show{% endif %}">
-                  <div class="table-responsive">
-                    <table class="table table-sm align-middle">
-                      <thead>
-                        <tr>
-                          <th>Time (IST)</th>
-                          <th>Total Views</th>
-                          <th>Gain (5 min)</th>
-                          <th>Hourly Growth</th>
-                          <th>
-                            24h Gain
-                            <span class="muted small" data-bs-toggle="tooltip" title="24h gain uses linear interpolation between nearest samples when exact 24h sample is not available. Tolerance applied when matching same clock-time prev day.">ⓘ</span>
-                          </th>
-                          <th>Change 24h vs prev day (%)</th>
-                          <th>Projected EOD</th>
-                          <th>Min reach (prev 23:55 gain scaled + prev 11:55 views)</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                      {% for ts, views, gain, hourly, gain24, pct24, proj_eod, min_reach in rows %}
-                        <tr>
-                          <td class="mono">{{ ts }}</td>
-                          <td class="mono">{{ "{:,}".format(views) }}</td>
-                          <td>
-                            {% if gain is none %}
-                              <span class="gain-null">—</span>
-                            {% elif gain >= 0 %}
-                              <span class="gain-pos">+{{ "{:,}".format(gain) }}</span>
-                            {% else %}
-                              <span class="gain-neg">{{ "{:,}".format(gain) }}</span>
-                            {% endif %}
-                          </td>
-                          <td>
-                            {% if hourly is none %}
-                              <span class="gain-null">—</span>
-                            {% elif hourly >= 0 %}
-                              <span class="gain-pos">+{{ "{:,}".format(hourly) }}</span>
-                            {% else %}
-                              <span class="gain-neg">{{ "{:,}".format(hourly) }}</span>
-                            {% endif %}
-                          </td>
-                          <td>
-                            {% if gain24 is none %}
-                              <span class="gain-null">—</span>
-                            {% elif gain24 >= 0 %}
-                              <span class="gain-pos">+{{ "{:,}".format(gain24) }}</span>
-                            {% else %}
-                              <span class="gain-neg">{{ "{:,}".format(gain24) }}</span>
-                            {% endif %}
-                          </td>
-                          <td>
-                            {% if pct24 is none %}
-                              <span class="gain-null">—</span>
-                            {% elif pct24 > 0 %}
-                              <span class="gain-pos pct-small"><span class="pct-arrow">▲</span>+{{ ('{:.2f}'.format(pct24)) }}%</span>
-                            {% elif pct24 < 0 %}
-                              <span class="gain-neg pct-small"><span class="pct-arrow">▼</span>{{ ('{:.2f}'.format(pct24)) }}%</span>
-                            {% else %}
-                              <span class="pct-small">0.00%</span>
-                            {% endif %}
-                          </td>
-                          <td class="mono">
-                            {% if proj_eod is none %}
-                              <span class="gain-null">—</span>
-                            {% else %}
-                              {{ "{:,}".format(proj_eod) }}
-                            {% endif %}
-                          </td>
-                          <td class="mono">
-                            {% if min_reach is none %}
-                              <span class="gain-null">—</span>
-                            {% else %}
-                              {{ "{:,}".format(min_reach) }}
-                            {% endif %}
-                          </td>
-                        </tr>
-                      {% endfor %}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-                {% set first = False %}
-              {% endfor %}
-            {% endif %}
-          </div>
-        </div>
-      </div>
-    {% endfor %}
+  <div class="mt-3 text-center muted">
+    Stored in PostgreSQL • UTC in DB, shown in IST • Use search to filter videos quickly.
   </div>
-
-  <footer class="mt-4 mb-3 text-center muted">
-    Stored in PostgreSQL • UTC in DB, shown in IST • Min reach = prev_day_23:55_gain24 * (1 + pct24/100) + prev_day_11:55_views.
-  </footer>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-  var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'))
-  tooltipTriggerList.forEach(function (el) {
-    new bootstrap.Tooltip(el)
-  })
+  // Sidebar click -> show detail card
+  document.querySelectorAll('.video-item').forEach(function(el) {
+    el.addEventListener('click', function() {
+      var id = this.dataset.videoId;
+      // mark active
+      document.querySelectorAll('.video-item').forEach(e => e.classList.remove('active'));
+      this.classList.add('active');
+      // show card
+      document.querySelectorAll('.video-detail-card').forEach(c => c.style.display = 'none');
+      var card = document.getElementById('video-card-' + id);
+      if (card) card.style.display = 'block';
+      // set exportFirst href to this video (small helper)
+      var exportBtn = document.getElementById('exportFirst');
+      if (exportBtn) exportBtn.href = '/export/' + id;
+      // collapse all day panels inside the shown card initially? keep as is
+    });
+  });
+
+  // Search filter
+  var search = document.getElementById('videoSearch');
+  var clearSearch = document.getElementById('clearSearch');
+  search && search.addEventListener('input', function() {
+    var q = this.value.trim().toLowerCase();
+    document.querySelectorAll('#videoList .video-item').forEach(function(it) {
+      var name = it.querySelector('.fw-semibold')?.textContent.trim().toLowerCase() || '';
+      var id = it.dataset.videoId || '';
+      it.style.display = (!q || name.includes(q) || id.includes(q)) ? '' : 'none';
+    });
+  });
+  clearSearch && clearSearch.addEventListener('click', function() { search.value=''; search.dispatchEvent(new Event('input')); });
+
+  // Expand/Collapse day panels within currently visible card
+  function toggleDayPanels(card, show) {
+    card.querySelectorAll('.day-panel').forEach(function(p) { p.style.display = show ? 'block' : 'none'; });
+    card.querySelectorAll('.day-toggle').forEach(function(b) { if (show) b.classList.add('active'); else b.classList.remove('active'); });
+  }
+  document.getElementById('expandAllBtn').addEventListener('click', function() {
+    var visible = document.querySelector('.video-detail-card[style*="display: block"]');
+    if (visible) toggleDayPanels(visible, true);
+  });
+  document.getElementById('collapseAllBtn').addEventListener('click', function() {
+    var visible = document.querySelector('.video-detail-card[style*="display: block"]');
+    if (visible) toggleDayPanels(visible, false);
+  });
+
+  // toggle single day button
+  document.addEventListener('click', function(ev) {
+    var b = ev.target.closest('.day-toggle');
+    if (!b) return;
+    var tgt = document.querySelector(b.dataset.target || ('#' + b.getAttribute('data-target').substring(1)));
+    if (!tgt) return;
+    var visible = tgt.style.display !== 'none';
+    tgt.style.display = visible ? 'none' : 'block';
+    b.classList.toggle('active', !visible);
+  });
+
+  // make first video item active on load
+  (function() {
+    var first = document.querySelector('#videoList .video-item');
+    if (first) first.classList.add('active');
+  })();
 </script>
 </body>
 </html>
