@@ -1,3 +1,6 @@
+# (full file — same as the weighted-trend app.py you already have,
+#  with the new "min_reach" column logic added)
+
 import os
 import threading
 import logging
@@ -569,8 +572,40 @@ def index():
                                 else:
                                     proj_eod = None
 
-                        # append new row: (ts, views, gain5, hourly, gain24, pct24, proj_eod)
-                        display_rows.append((ts_ist, views, gain_5min, hourly_gain, gain_24h, pct24, proj_eod))
+                        # --- NEW: compute min_reach using previous day's 23:55 gain_24h ---
+                        min_reach = None
+                        if pct24 is not None:
+                            # try to find prev_day 23:55 slot's gain_24h
+                            prev_map_for_23 = date_time_map.get(prev_date_str, {})
+                            # exact target time string
+                            target_2355 = "23:55:00"
+                            tpl_2355 = None
+                            if prev_map_for_23:
+                                tpl_2355 = prev_map_for_23.get(target_2355)
+                                if tpl_2355 is None:
+                                    # fallback to closest within tolerance (use 10s)
+                                    tpl_2355 = find_closest_tpl(prev_map_for_23, target_2355, tolerance_seconds=10)
+                                if tpl_2355 is None:
+                                    # final fallback: choose latest available slot (max time)
+                                    try:
+                                        latest_key = max(prev_map_for_23.keys(), key=lambda k: _time_to_seconds(k))
+                                        tpl_2355 = prev_map_for_23.get(latest_key)
+                                    except Exception:
+                                        tpl_2355 = None
+                            prev_2355_gain24 = tpl_2355[4] if tpl_2355 else None
+
+                            if prev_2355_gain24 not in (None, 0):
+                                try:
+                                    m = 1.0 + (pct24 / 100.0)
+                                    # clamp multiplier to non-negative
+                                    if m < 0:
+                                        m = 0.0
+                                    add = int(round(prev_2355_gain24 * m))
+                                    min_reach = (views or 0) + add
+                                except Exception:
+                                    min_reach = None
+                        # append new row: (ts, views, gain5, hourly, gain24, pct24, proj_eod, min_reach)
+                        display_rows.append((ts_ist, views, gain_5min, hourly_gain, gain_24h, pct24, proj_eod, min_reach))
 
                     # newest-first for display
                     daily[date_str] = list(reversed(display_rows))
@@ -825,6 +860,33 @@ def export_video(video_id):
                     total_predicted_future += predicted_gain
                 proj_eod = (views or 0) + total_predicted_future
 
+        # compute min_reach for export (same logic)
+        min_reach = None
+        if pct24 is not None:
+            prev_map_for_23 = date_map.get(prev_date, {})
+            target_2355 = "23:55:00"
+            tpl_2355 = None
+            if prev_map_for_23:
+                tpl_2355 = prev_map_for_23.get(target_2355)
+                if tpl_2355 is None:
+                    tpl_2355 = find_closest_tpl(prev_map_for_23, target_2355, tolerance_seconds=10)
+                if tpl_2355 is None:
+                    try:
+                        latest_key = max(prev_map_for_23.keys(), key=lambda k: _time_to_seconds(k))
+                        tpl_2355 = prev_map_for_23.get(latest_key)
+                    except Exception:
+                        tpl_2355 = None
+            prev_2355_gain24 = tpl_2355[4] if tpl_2355 else None
+            if prev_2355_gain24 not in (None, 0):
+                try:
+                    m = 1.0 + (pct24 / 100.0)
+                    if m < 0:
+                        m = 0.0
+                    add = int(round(prev_2355_gain24 * m))
+                    min_reach = (views or 0) + add
+                except Exception:
+                    min_reach = None
+
         rows_for_df.append({
             "Time (IST)": ts,
             "Views": views,
@@ -832,7 +894,8 @@ def export_video(video_id):
             "Hourly Growth": hourly if hourly is not None else "",
             "Gain (24 h)": gain24 if gain24 is not None else "",
             "Change 24h vs prev day (%)": pct24 if pct24 is not None else "",
-            "Projected EOD": proj_eod if proj_eod is not None else ""
+            "Projected EOD": proj_eod if proj_eod is not None else "",
+            "Min reach (based on prev day's 23:55)": min_reach if min_reach is not None else ""
         })
 
     df_views = pd.DataFrame(rows_for_df)
