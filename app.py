@@ -1,4 +1,4 @@
-# Full app.py with "Projected (min) views" column (uses exact yesterday 23:55 row)
+# Full app.py with "Projected (min) views" using exact yesterday 22:30 row
 import os
 import threading
 import logging
@@ -399,18 +399,16 @@ def index():
                             except Exception:
                                 pct24 = None
 
-                        # --- new: projected (min) views using EXACT yesterday 23:55 row ---
+                        # --- new: projected (min) views using EXACT yesterday 22:30 row ---
                         projected = None
-                        # exact key for yesterday 23:55:00 (string)
-                        yesterday_2355 = prev_date_str + " 22:50:00"
-                        # look up processed map for prev_date_str exactly at "23:55:00"
-                        prev_2355_tpl = prev_map.get("22:50:00")  # exact match only
-                        if prev_2355_tpl is not None and pct24 not in (None,):
-                            prev_views_2355 = prev_2355_tpl[1]
-                            prev_gain24_2355 = prev_2355_tpl[4]
-                            if prev_views_2355 is not None and prev_gain24_2355 not in (None, 0):
+                        # exact key for yesterday 22:30:00 (string)
+                        prev_2230_tpl = prev_map.get("22:30:00")  # exact match only
+                        if prev_2230_tpl is not None and pct24 not in (None,):
+                            prev_views_2230 = prev_2230_tpl[1]
+                            prev_gain24_2230 = prev_2230_tpl[4]
+                            if prev_views_2230 is not None and prev_gain24_2230 not in (None, 0):
                                 try:
-                                    projected_val = prev_views_2355 + prev_gain24_2355 * (1 + (pct24 / 100.0))
+                                    projected_val = prev_views_2230 + prev_gain24_2230 * (1 + (pct24 / 100.0))
                                     projected = int(round(projected_val))
                                 except Exception:
                                     projected = None
@@ -598,7 +596,7 @@ def export_video(video_id):
 
     processed = process_gains(asc_rows)  # (ts, views, gain5, hourly, gain24)
 
-    # Build mapping date -> time -> tpl for prev-day lookups (pct and for exact 23:55)
+    # Build mapping date -> time -> tpl for prev-day lookups (pct and for exact 22:30)
     date_map = {}
     for tpl in processed:
         date_str = tpl[0].split(" ")[0]
@@ -622,15 +620,15 @@ def export_video(video_id):
         if prev_gain24_for_pct not in (None, 0):
             pct24 = round(((gain24 or 0) - prev_gain24_for_pct) / prev_gain24_for_pct * 100, 2)
 
-        # projected using exact yesterday 23:55 row (exact match only)
+        # projected using exact yesterday 22:30 row (exact match only)
         projected = None
-        prev_2355_tpl = prev_map.get("23:55:00")
-        if prev_2355_tpl is not None and pct24 not in (None,):
-            prev_views_2355 = prev_2355_tpl[1]
-            prev_gain24_2355 = prev_2355_tpl[4]
-            if prev_views_2355 is not None and prev_gain24_2355 not in (None, 0):
+        prev_2230_tpl = prev_map.get("22:30:00")
+        if prev_2230_tpl is not None and pct24 not in (None,):
+            prev_views_2230 = prev_2230_tpl[1]
+            prev_gain24_2230 = prev_2230_tpl[4]
+            if prev_views_2230 is not None and prev_gain24_2230 not in (None, 0):
                 try:
-                    projected_val = prev_views_2355 + prev_gain24_2355 * (1 + (pct24 / 100.0))
+                    projected_val = prev_views_2230 + prev_gain24_2230 * (1 + (pct24 / 100.0))
                     projected = int(round(projected_val))
                 except Exception:
                     projected = None
