@@ -1,4 +1,4 @@
-# app.py — Two-page YouTube tracker with Projected (min) views (exact yesterday 22:30)
+# app.py — YouTube tracker + Google OAuth + manual signup review (copy-paste ready)
 import os
 import threading
 import logging
@@ -13,17 +13,27 @@ from typing import Optional
 import pandas as pd
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    flash, send_file
+    flash, send_file, abort
 )
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import psycopg
 from psycopg.rows import dict_row
 
+# Auth
+from authlib.integrations.flask_client import OAuth
+from flask_login import (
+    LoginManager, UserMixin, login_user, logout_user,
+    current_user, login_required
+)
+from flask_wtf import FlaskForm
+from wtforms import StringField, TextAreaField, SubmitField
+from wtforms.validators import DataRequired, Email
+
 # -----------------------------
 # App & logging
 # -----------------------------
-app = Flask(__name__)
+app = Flask(__name__, template_folder="templates")
 app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(24))
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("yt-tracker")
@@ -31,7 +41,7 @@ log = logging.getLogger("yt-tracker")
 IST = ZoneInfo("Asia/Kolkata")
 
 # -----------------------------
-# Env
+# Env & OAuth
 # -----------------------------
 API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 POSTGRES_URL = os.getenv("DATABASE_URL")
@@ -45,6 +55,25 @@ if API_KEY:
         log.info("YouTube client ready.")
     except Exception as e:
         log.exception("YouTube init failed: %s", e)
+
+# Google OAuth config
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+
+oauth = OAuth(app)
+if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET:
+    oauth.register(
+        name='google',
+        client_id=GOOGLE_CLIENT_ID,
+        client_secret=GOOGLE_CLIENT_SECRET,
+        server_metadata_url='https://accounts.google.com/.well-known/openid-configuration',
+        client_kwargs={'scope': 'openid email profile'},
+    )
+else:
+    log.warning("Google OAuth not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET to enable sign-in.")
+
+login_manager = LoginManager(app)
+login_manager.login_view = "home"
 
 # -----------------------------
 # DB connection (psycopg3)
@@ -100,11 +129,37 @@ def init_db():
           note         TEXT
         );
         """)
+        # Users & signup requests tables for auth & admin workflow
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+          id SERIAL PRIMARY KEY,
+          email TEXT UNIQUE NOT NULL,
+          name TEXT,
+          google_id TEXT UNIQUE,
+          is_approved BOOLEAN NOT NULL DEFAULT FALSE,
+          is_admin BOOLEAN NOT NULL DEFAULT FALSE,
+          signup_note TEXT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          approved_at TIMESTAMPTZ
+        );
+        """)
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS signup_requests (
+          id SERIAL PRIMARY KEY,
+          email TEXT NOT NULL,
+          name TEXT,
+          note TEXT,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+          handled BOOLEAN NOT NULL DEFAULT FALSE,
+          handled_by INT REFERENCES users(id),
+          handled_at TIMESTAMPTZ
+        );
+        """)
     log.info("DB schema ready.")
 
 
 # -----------------------------
-# YouTube helpers
+# YouTube helpers (unchanged)
 # -----------------------------
 def extract_video_id(link: str) -> str | None:
     try:
@@ -162,7 +217,7 @@ def fetch_stats_batch(video_ids: list[str]) -> dict:
 
 
 # -----------------------------
-# Storage helpers
+# Storage helpers (unchanged)
 # -----------------------------
 def now_utc():
     return datetime.now(timezone.utc).replace(microsecond=0)
@@ -286,7 +341,7 @@ def process_gains(rows_asc: list[dict]):
 
 
 # -----------------------------
-# Background sampler
+# Background sampler (unchanged)
 # -----------------------------
 _sampler_started = False
 _sampler_lock = threading.Lock()
@@ -334,15 +389,33 @@ def start_background():
 
 
 # -----------------------------
+# Auth: Flask-Login user loader & helper
+# -----------------------------
+class LocalUser(UserMixin):
+    def __init__(self, id, email, name, is_admin=False, is_approved=False):
+        self.id = str(id)
+        self.email = email
+        self.name = name
+        self.is_admin = bool(is_admin)
+        self.is_approved = bool(is_approved)
+
+
+@login_manager.user_loader
+def load_user(user_id):
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, email, name, is_admin, is_approved FROM users WHERE id=%s", (int(user_id),))
+        r = cur.fetchone()
+    if not r:
+        return None
+    return LocalUser(r["id"], r["email"], r["name"], r["is_admin"], r["is_approved"])
+
+
+# -----------------------------
 # Helper: build display data for one video (used by detail & export)
+# same as earlier but now includes latest_ts_iso and latest_ts_ist in returned dict
 # -----------------------------
 def build_video_display(vid: str):
-    """
-    Returns dict used by the video detail page:
-      - video_id, name, is_tracking, latest_views, latest_ts
-      - daily: {date_str: [ (ts, views, gain5, hourly, gain24, pct24, projected), ... ] } (newest-first)
-      - targets list
-    """
     conn = db()
     with conn.cursor() as cur:
         cur.execute("SELECT video_id, name, is_tracking FROM video_list WHERE video_id=%s", (vid,))
@@ -404,7 +477,6 @@ def build_video_display(vid: str):
 
                     display_rows.append((ts_ist, views, gain_5min, hourly_gain, gain_24h, pct24, projected))
 
-                # newest-first
                 daily[date_str] = list(reversed(display_rows))
 
         latest_views = None
@@ -412,6 +484,10 @@ def build_video_display(vid: str):
         if all_rows:
             latest_views = all_rows[-1]["views"]
             latest_ts = all_rows[-1]["ts_utc"]
+
+        # --- added: ISO + IST formatted strings for frontend badge ---
+        latest_ts_iso = latest_ts.isoformat() if latest_ts is not None else None
+        latest_ts_ist = latest_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if latest_ts is not None else None
 
         # targets
         cur.execute("SELECT id, target_views, target_ts, note FROM targets WHERE video_id=%s ORDER BY target_ts ASC", (vid,))
@@ -453,12 +529,15 @@ def build_video_display(vid: str):
         "daily": daily,
         "targets": targets_display,
         "latest_views": latest_views,
-        "latest_ts": latest_ts
+        "latest_ts": latest_ts,
+        "latest_ts_iso": latest_ts_iso,
+        "latest_ts_ist": latest_ts_ist
     }
 
 
 # -----------------------------
-# Routes (two-page site)
+# Routes: home + video detail + existing tracker features (unchanged)
+# but templates slightly updated to show login UI
 # -----------------------------
 @app.get("/healthz")
 def healthz():
@@ -549,7 +628,11 @@ def add_target(video_id):
 
 
 @app.get("/remove_target/<int:target_id>")
+@login_required
 def remove_target(target_id):
+    # only allow admin or the presence of an approved user? For now require admin
+    if not current_user.is_admin:
+        abort(403)
     conn = db()
     with conn.cursor() as cur:
         cur.execute("SELECT video_id FROM targets WHERE id=%s", (target_id,))
@@ -564,7 +647,11 @@ def remove_target(target_id):
 
 
 @app.get("/stop_tracking/<video_id>")
+@login_required
 def stop_tracking(video_id):
+    # guard: require admin to pause/resume to avoid anonymous misuse
+    if not current_user.is_admin:
+        abort(403)
     conn = db()
     with conn.cursor() as cur:
         cur.execute("SELECT is_tracking, name FROM video_list WHERE video_id=%s", (video_id,))
@@ -579,7 +666,11 @@ def stop_tracking(video_id):
 
 
 @app.get("/remove_video/<video_id>")
+@login_required
 def remove_video(video_id):
+    # require admin
+    if not current_user.is_admin:
+        abort(403)
     conn = db()
     with conn.cursor() as cur:
         cur.execute("SELECT name FROM video_list WHERE video_id=%s", (video_id,))
@@ -677,9 +768,160 @@ def export_video(video_id):
     )
 
 
-# Bootstrap
+# -----------------------------
+# OAuth & Signup flows
+# -----------------------------
+@app.get("/login/google")
+def login_google():
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        flash("Google login not configured.", "warning")
+        return redirect(url_for("home"))
+    redirect_uri = url_for('auth_google_callback', _external=True)
+    return oauth.google.authorize_redirect(redirect_uri)
+
+
+@app.get("/auth/google/callback")
+def auth_google_callback():
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        flash("Google login not configured.", "warning")
+        return redirect(url_for("home"))
+
+    token = oauth.google.authorize_access_token()
+    if not token:
+        flash("Failed to get token from Google.", "danger")
+        return redirect(url_for("home"))
+    userinfo = oauth.google.parse_id_token(token)
+    if not userinfo:
+        flash("Failed to fetch Google userinfo.", "danger")
+        return redirect(url_for("home"))
+
+    google_id = userinfo.get("sub")
+    email = userinfo.get("email")
+    name = userinfo.get("name") or email.split("@")[0]
+
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, is_approved, is_admin FROM users WHERE google_id=%s OR email=%s", (google_id, email))
+        r = cur.fetchone()
+        if r:
+            uid, is_approved, is_admin = r["id"], r["is_approved"], r["is_admin"]
+            cur.execute("""
+              UPDATE users SET google_id = COALESCE(google_id, %s), name = COALESCE(name, %s), email = %s
+              WHERE id=%s
+            """, (google_id, name, email, uid))
+        else:
+            # create unapproved user by default (admin must approve)
+            cur.execute("""
+              INSERT INTO users (email, name, google_id, is_approved)
+              VALUES (%s, %s, %s, FALSE) RETURNING id, is_approved, is_admin
+            """, (email, name, google_id))
+            r = cur.fetchone()
+            uid, is_approved, is_admin = r["id"], r["is_approved"], r["is_admin"]
+
+    if is_approved:
+        user = LocalUser(uid, email, name, bool(is_admin), bool(is_approved))
+        login_user(user)
+        flash("Logged in.", "success")
+        return redirect(url_for("home"))
+    else:
+        flash("Your account is pending approval. An admin will review your request.", "info")
+        return redirect(url_for("home"))
+
+
+@app.get("/logout")
+@login_required
+def logout():
+    logout_user()
+    flash("Logged out.", "info")
+    return redirect(url_for("home"))
+
+
+# Manual signup (request) form using Flask-WTF
+class SignupRequestForm(FlaskForm):
+    name = StringField("Full name", validators=[DataRequired()])
+    email = StringField("Email", validators=[DataRequired(), Email()])
+    note = TextAreaField("Reason for access (optional)")
+    submit = SubmitField("Request access")
+
+
+@app.route("/signup", methods=["GET", "POST"])
+def signup_request():
+    form = SignupRequestForm()
+    if form.validate_on_submit():
+        email = form.email.data.strip().lower()
+        name = form.name.data.strip()
+        note = form.note.data.strip()
+        conn = db()
+        with conn.cursor() as cur:
+            # avoid duplicate pending requests
+            cur.execute("SELECT id FROM signup_requests WHERE email=%s AND handled=FALSE", (email,))
+            if cur.fetchone():
+                flash("A pending request already exists for this email.", "warning")
+                return redirect(url_for("home"))
+            cur.execute("INSERT INTO signup_requests (email, name, note) VALUES (%s,%s,%s)", (email, name, note))
+        flash("Signup request submitted — an admin will review it.", "success")
+        return redirect(url_for("home"))
+    return render_template("signup_request.html", form=form)
+
+
+# Admin: view pending requests
+@app.get("/admin/requests")
+@login_required
+def admin_requests():
+    if not current_user.is_admin:
+        abort(403)
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, email, name, note, created_at FROM signup_requests WHERE handled=FALSE ORDER BY created_at")
+        pending = cur.fetchall()
+    return render_template("admin_requests.html", pending=pending)
+
+
+@app.post("/admin/approve_request/<int:req_id>")
+@login_required
+def approve_request(req_id):
+    if not current_user.is_admin:
+        abort(403)
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("SELECT email, name FROM signup_requests WHERE id=%s AND handled=FALSE", (req_id,))
+        r = cur.fetchone()
+        if not r:
+            flash("Request not found or already handled.", "warning")
+            return redirect(url_for("admin_requests"))
+        email, name = r["email"], r["name"]
+        # create user and approve
+        cur.execute("INSERT INTO users (email, name, is_approved, approved_at) VALUES (%s,%s,TRUE,now()) RETURNING id", (email, name))
+        new_id = cur.fetchone()["id"]
+        cur.execute("UPDATE signup_requests SET handled=TRUE, handled_by=%s, handled_at=now() WHERE id=%s", (current_user.id, req_id))
+    flash(f"Request approved — user created (id {new_id}).", "success")
+    # TODO: send email to the user (optional)
+    return redirect(url_for("admin_requests"))
+
+
+@app.post("/admin/decline_request/<int:req_id>")
+@login_required
+def decline_request(req_id):
+    if not current_user.is_admin:
+        abort(403)
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("SELECT id FROM signup_requests WHERE id=%s AND handled=FALSE", (req_id,))
+        if not cur.fetchone():
+            flash("Request not found or already handled.", "warning")
+            return redirect(url_for("admin_requests"))
+        cur.execute("UPDATE signup_requests SET handled=TRUE, handled_by=%s, handled_at=now() WHERE id=%s", (current_user.id, req_id))
+    flash("Request declined.", "info")
+    return redirect(url_for("admin_requests"))
+
+
+# -----------------------------
+# Boot
+# -----------------------------
 init_db()
 start_background()
 
 if __name__ == "__main__":
+    # helpful startup logging
+    log.info("Starting app with Google OAuth %s", "enabled" if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET else "disabled")
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")))
