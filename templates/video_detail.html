@@ -102,6 +102,21 @@
 </head>
 <body>
 <div class="container py-3">
+
+  <!-- Top nav: back + user info / logout / add-user -->
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('home') }}">← Back</a>
+    <div class="d-flex align-items-center gap-2">
+      {% if current_user %}
+        <span class="small text-muted d-none d-sm-inline">Logged in as <strong>{{ current_user.username }}</strong></span>
+        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin_users') }}">Add user</a>
+        <a class="btn btn-sm btn-outline-danger" href="{{ url_for('logout') }}">Logout</a>
+      {% else %}
+        <a class="btn btn-sm btn-primary" href="{{ url_for('login') }}">Login</a>
+      {% endif %}
+    </div>
+  </div>
+
   <div class="video-hero">
     <!-- Thumbnail -->
     <a href="https://www.youtube.com/watch?v={{ v.video_id }}" target="_blank" rel="noopener noreferrer">
