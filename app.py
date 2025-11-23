@@ -15,7 +15,7 @@ from functools import wraps
 import pandas as pd
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    flash, send_file, session, g
+    flash, send_file, session, g, make_response
 )
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -116,12 +116,25 @@ def init_db():
           current_session_token TEXT
         );
         """)
-        # add is_active if not present
         cur.execute("""
         ALTER TABLE users
         ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
         """)
+        # 🔐 new device-related columns
+        cur.execute("""
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS device_token TEXT;
+        """)
+        cur.execute("""
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS device_ua TEXT;
+        """)
+        cur.execute("""
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS device_info TEXT;
+        """)
 
+        # (rest of your tables: video_list, views, targets, channel_stats ...)
         cur.execute("""
         CREATE TABLE IF NOT EXISTS video_list (
           video_id    TEXT PRIMARY KEY,
@@ -158,6 +171,7 @@ def init_db():
         );
         """)
     log.info("DB schema ready.")
+
 
 
 # -----------------------------
@@ -600,6 +614,7 @@ def build_video_display(vid: str):
 # -----------------------------
 @app.route("/login", methods=["GET", "POST"])
 def login():
+    # if already logged in, send to home
     if g.get("user"):
         return redirect(url_for("home"))
 
@@ -615,7 +630,8 @@ def login():
         conn = db()
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, username, password_hash, current_session_token, is_active "
+                "SELECT id, username, password_hash, current_session_token, "
+                "is_active, device_token, device_ua, device_info "
                 "FROM users WHERE username=%s",
                 (username,)
             )
@@ -631,22 +647,59 @@ def login():
             flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
             return redirect(url_for("login", next=next_url))
 
-        # 🔄 NEW BEHAVIOUR: latest login wins
-        # Always issue a new session token, overwriting any previous device.
-        token = secrets.token_hex(32)
+        # ---------- Device lock: mix of cookie token + fingerprint ----------
+        ua_now = request.headers.get("User-Agent", "") or ""
+        cookie_device = request.cookies.get("device_token")
+        stored_device = user.get("device_token")
+        stored_ua = (user.get("device_ua") or "")
+
+        # simple fingerprint now: just user-agent (can extend later)
+        fingerprint_now = ua_now.strip()
+        stored_fingerprint = (user.get("device_info") or "").strip()
+
+        def same_device():
+            # 1) Strong match: cookie token matches DB
+            if stored_device and cookie_device and cookie_device == stored_device:
+                return True
+            # 2) Fallback: UA / fingerprint match (handles cookie cleared on same device)
+            if stored_fingerprint and fingerprint_now and stored_fingerprint == fingerprint_now:
+                return True
+            # 3) If no device stored yet, we will bind below, so not "same"
+            return False
+
+        if stored_device is None:
+            # First login: bind current device
+            new_device_token = secrets.token_hex(32)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE users SET device_token=%s, device_ua=%s, device_info=%s WHERE id=%s",
+                    (new_device_token, ua_now, fingerprint_now, user["id"])
+                )
+            stored_device = new_device_token
+        else:
+            # Device already bound: ensure this is the same device
+            if not same_device():
+                flash("Login only allowed from your registered device. Contact admin at 1944pranav@gmail.com to reset.", "danger")
+                return redirect(url_for("login", next=next_url))
+
+        # ---------- Session token: latest login wins (on this device) ----------
+        session_token = secrets.token_hex(32)
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE users SET current_session_token=%s WHERE id=%s",
-                (token, user["id"])
+                (session_token, user["id"])
             )
 
-        # store in Flask session
         session.clear()
         session["user_id"] = user["id"]
-        session["session_token"] = token
+        session["session_token"] = session_token
 
-        flash("Logged in.", "success")
-        return redirect(next_url)
+        # build response so we can set device cookie
+        resp = make_response(redirect(next_url))
+        # keep device cookie valid ~1 year
+        if stored_device:
+            resp.set_cookie("device_token", stored_device, max_age=365*24*3600, httponly=True, samesite="Lax")
+        return resp
 
     # GET
     return render_template("login.html")
