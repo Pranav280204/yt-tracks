@@ -22,7 +22,15 @@
 <div class="container py-4">
   <div class="d-flex align-items-center justify-content-between mb-3">
     <h1 class="mb-0">📺 YouTube Tracker</h1>
-    <a class="btn btn-outline-secondary" href="{{ url_for('home') }}">Home</a>
+    <div class="d-flex align-items-center gap-2">
+      {% if current_user %}
+        <span class="small text-muted d-none d-sm-inline">Logged in as <strong>{{ current_user.username }}</strong></span>
+        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin_users') }}">Add user</a>
+        <a class="btn btn-sm btn-outline-danger" href="{{ url_for('logout') }}">Logout</a>
+      {% else %}
+        <a class="btn btn-sm btn-primary" href="{{ url_for('login') }}">Login</a>
+      {% endif %}
+    </div>
   </div>
 
   {% with messages = get_flashed_messages(with_categories=true) %}
@@ -85,7 +93,6 @@
 
   <footer class="mt-4 muted text-center">Stored in PostgreSQL • UTC in DB, shown in IST</footer>
 </div>
-
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>
