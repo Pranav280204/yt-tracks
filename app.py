@@ -107,7 +107,7 @@ def db():
 def init_db():
     conn = db()
     with conn.cursor() as cur:
-        # Users for login
+        # Users for auth
         cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
           id SERIAL PRIMARY KEY,
@@ -116,8 +116,12 @@ def init_db():
           current_session_token TEXT
         );
         """)
+        # add is_active if not present
+        cur.execute("""
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+        """)
 
-        # Tracked videos
         cur.execute("""
         CREATE TABLE IF NOT EXISTS video_list (
           video_id    TEXT PRIMARY KEY,
@@ -125,8 +129,6 @@ def init_db():
           is_tracking BOOLEAN NOT NULL DEFAULT TRUE
         );
         """)
-
-        # Per-video samples (5-min snapshots)
         cur.execute("""
         CREATE TABLE IF NOT EXISTS views (
           video_id  TEXT NOT NULL,
@@ -138,8 +140,6 @@ def init_db():
           FOREIGN KEY (video_id) REFERENCES video_list(video_id) ON DELETE CASCADE
         );
         """)
-
-        # Targets for each video
         cur.execute("""
         CREATE TABLE IF NOT EXISTS targets (
           id           SERIAL PRIMARY KEY,
@@ -149,18 +149,16 @@ def init_db():
           note         TEXT
         );
         """)
-
-        # Channel-level snapshots (total channel views over time)
         cur.execute("""
         CREATE TABLE IF NOT EXISTS channel_stats (
-          channel_id  TEXT NOT NULL,
-          ts_utc      TIMESTAMPTZ NOT NULL,
+          channel_id TEXT NOT NULL,
+          ts_utc TIMESTAMPTZ NOT NULL,
           total_views BIGINT,
           PRIMARY KEY (channel_id, ts_utc)
         );
         """)
-
     log.info("DB schema ready.")
+
 
 # -----------------------------
 # Auth helpers
@@ -611,23 +609,30 @@ def login():
         conn = db()
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, username, password_hash, current_session_token FROM users WHERE username=%s",
+                "SELECT id, username, password_hash, current_session_token, is_active FROM users WHERE username=%s",
                 (username,)
             )
             user = cur.fetchone()
 
+        # invalid username/password
         if not user or not check_password_hash(user["password_hash"], password):
             flash("Invalid credentials.", "danger")
             return redirect(url_for("login", next=next_url))
 
-        # single-device: always rotate session token on login
-        # (last login wins, old device becomes invalid automatically)
+        # deactivated user
+        if not user["is_active"]:
+            flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
+            return redirect(url_for("login", next=next_url))
+
+        # single-device: if already has active session token, deny new login
+        if user["current_session_token"]:
+            flash("This user is already logged in on another device. Ask admin to reset or log out there.", "danger")
+            return redirect(url_for("login", next=next_url))
+
+        # create new session token
         token = secrets.token_hex(32)
         with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE users SET current_session_token=%s WHERE id=%s",
-                (token, user["id"])
-            )
+            cur.execute("UPDATE users SET current_session_token=%s WHERE id=%s", (token, user["id"]))
 
         session.clear()
         session["user_id"] = user["id"]
@@ -638,6 +643,7 @@ def login():
 
     # GET
     return render_template("login.html")
+
 
 @app.get("/logout")
 @login_required
@@ -652,40 +658,80 @@ def logout():
 @app.route("/admin/users", methods=["GET", "POST"])
 def admin_users():
     """
-    Admin add-user page.
-    Protected by ADMIN_CREATE_SECRET (env var).
-    No login required, but you must know the secret.
+    Admin page:
+      - Create users (username + password)
+      - Activate / deactivate users
+    Protected by ADMIN_CREATE_SECRET (env var) on POST actions.
     """
+    conn = db()
+
     if request.method == "POST":
         admin_secret = request.form.get("admin_secret") or ""
-        username = (request.form.get("username") or "").strip()
-        password = request.form.get("password") or ""
+        action = request.form.get("action") or "create"
+
         if not ADMIN_CREATE_SECRET:
             flash("ADMIN_CREATE_SECRET not configured on server.", "danger")
             return redirect(url_for("admin_users"))
+
         if admin_secret != ADMIN_CREATE_SECRET:
             flash("Invalid admin password.", "danger")
             return redirect(url_for("admin_users"))
-        if not username or not password:
-            flash("Enter username and password.", "warning")
-            return redirect(url_for("admin_users"))
 
-        pw_hash = generate_password_hash(password)
-        conn = db()
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO users (username, password_hash) VALUES (%s, %s)",
-                    (username, pw_hash)
-                )
-            flash(f"User '{username}' created.", "success")
-        except Exception as e:
-            log.exception("Create user failed: %s", e)
-            flash("Could not create user (maybe username already exists).", "danger")
+        # ----- CREATE USER -----
+        if action == "create":
+            username = (request.form.get("username") or "").strip()
+            password = request.form.get("password") or ""
+            if not username or not password:
+                flash("Enter username and password.", "warning")
+                return redirect(url_for("admin_users"))
+
+            pw_hash = generate_password_hash(password)
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO users (username, password_hash, is_active) VALUES (%s, %s, TRUE)",
+                        (username, pw_hash)
+                    )
+                flash(f"User '{username}' created.", "success")
+            except Exception as e:
+                log.exception("Create user failed: %s", e)
+                flash("Could not create user (maybe username already exists).", "danger")
+
+        # ----- TOGGLE ACTIVE (activate/deactivate) -----
+        elif action == "toggle_active":
+            try:
+                user_id = int(request.form.get("user_id") or "0")
+                new_state = request.form.get("new_state")  # "1" or "0"
+            except ValueError:
+                flash("Invalid user id.", "danger")
+                return redirect(url_for("admin_users"))
+
+            is_active = True if new_state == "1" else False
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("UPDATE users SET is_active=%s WHERE id=%s", (is_active, user_id))
+                flash(("Activated" if is_active else "Deactivated") + f" user id {user_id}.", "info")
+            except Exception as e:
+                log.exception("Toggle active failed: %s", e)
+                flash("Could not update user status.", "danger")
+
         return redirect(url_for("admin_users"))
 
-    # GET
-    return render_template("admin_users.html")
+    # GET: fetch all users for display
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT
+              id,
+              username,
+              is_active,
+              (current_session_token IS NOT NULL) AS is_logged_in
+            FROM users
+            ORDER BY username
+        """)
+        users = cur.fetchall()
+
+    return render_template("admin_users.html", users=users)
+
 
 # -----------------------------
 # Routes (protected)
