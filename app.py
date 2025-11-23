@@ -26,12 +26,23 @@ from werkzeug.security import generate_password_hash, check_password_hash
 # -----------------------------
 # App & logging
 # -----------------------------
+# -----------------------------
+# App & logging
+# -----------------------------
 app = Flask(__name__)
-app.secret_key = os.getenv("FLASK_SECRET_KEY", os.urandom(24))
+
+# Use ONE secret key — fixed & persistent
+app.secret_key = os.getenv(
+    "FLASK_SECRET_KEY",
+    "xW3p7hU2q9L0zA4nD8rK1vS6bC5yT0j"  # fallback used only in local dev
+)
+
+app.permanent_session_lifetime = timedelta(days=30)
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 log = logging.getLogger("yt-tracker")
 
 IST = ZoneInfo("Asia/Kolkata")
+
 
 # -----------------------------
 # Env & cache TTL
@@ -690,7 +701,9 @@ def login():
                 (session_token, user["id"])
             )
 
+        # 👇 IMPORTANT: make session persistent
         session.clear()
+        session.permanent = True          # <--- add this line
         session["user_id"] = user["id"]
         session["session_token"] = session_token
 
@@ -703,6 +716,7 @@ def login():
 
     # GET
     return render_template("login.html")
+
 
 
 
