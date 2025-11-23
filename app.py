@@ -1003,8 +1003,6 @@ def stop_tracking(video_id):
 
 @app.post("/remove_video/<video_id>")
 @login_required
-@app.post("/remove_video/<video_id>")
-@login_required
 def remove_video(video_id):
     # ✅ Require admin password to remove any video
     admin_secret = (request.form.get("admin_secret") or "").strip()
