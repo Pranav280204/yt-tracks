@@ -1,24 +1,27 @@
-# app.py — Tracker with channel_stats snapshots and channel-gain badge
+# app.py — YouTube tracker + auth (login, single-device, admin add-user)
 import os
 import threading
 import logging
 import time
 import math
+import secrets
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from urllib.parse import urlparse, parse_qs
 from zoneinfo import ZoneInfo
 from typing import Optional, Dict, Tuple
+from functools import wraps
 
 import pandas as pd
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    flash, send_file
+    flash, send_file, session, g
 )
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 import psycopg
 from psycopg.rows import dict_row
+from werkzeug.security import generate_password_hash, check_password_hash
 
 # -----------------------------
 # App & logging
@@ -35,8 +38,9 @@ IST = ZoneInfo("Asia/Kolkata")
 # -----------------------------
 API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 POSTGRES_URL = os.getenv("DATABASE_URL")
+ADMIN_CREATE_SECRET = os.getenv("ADMIN_CREATE_SECRET", "")  # master password for creating users
+
 CHANNEL_CACHE_TTL = int(os.getenv("CHANNEL_CACHE_TTL", "50"))  # seconds; < sampler interval
-CHANNEL_REFRESH_INTERVAL = int(os.getenv("CHANNEL_REFRESH_INTERVAL", "60"))  # refresher (not used for DB writes)
 if not POSTGRES_URL:
     log.warning("DATABASE_URL not set.")
 
@@ -103,6 +107,16 @@ def db():
 def init_db():
     conn = db()
     with conn.cursor() as cur:
+        # Users for auth
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+          id SERIAL PRIMARY KEY,
+          username TEXT UNIQUE NOT NULL,
+          password_hash TEXT NOT NULL,
+          current_session_token TEXT
+        );
+        """)
+
         cur.execute("""
         CREATE TABLE IF NOT EXISTS video_list (
           video_id    TEXT PRIMARY KEY,
@@ -130,7 +144,6 @@ def init_db():
           note         TEXT
         );
         """)
-        # channel stats table to store snapshots (ts aligned to sampler time)
         cur.execute("""
         CREATE TABLE IF NOT EXISTS channel_stats (
           channel_id TEXT NOT NULL,
@@ -140,6 +153,44 @@ def init_db():
         );
         """)
     log.info("DB schema ready.")
+
+# -----------------------------
+# Auth helpers
+# -----------------------------
+def get_current_user():
+    uid = session.get("user_id")
+    token = session.get("session_token")
+    if not uid or not token:
+        return None
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, username, current_session_token FROM users WHERE id=%s",
+            (uid,)
+        )
+        u = cur.fetchone()
+    if not u or not u["current_session_token"] or u["current_session_token"] != token:
+        return None
+    return u
+
+@app.before_request
+def load_user():
+    # runs every request; store user in g
+    g.user = get_current_user()
+
+@app.context_processor
+def inject_user():
+    # make current_user available in templates
+    return {"current_user": getattr(g, "user", None)}
+
+def login_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not g.get("user"):
+            flash("Please log in.", "warning")
+            return redirect(url_for("login", next=request.path))
+        return f(*args, **kwargs)
+    return wrapper
 
 # -----------------------------
 # YouTube helpers
@@ -228,16 +279,11 @@ def safe_store(video_id: str, stats: dict):
         )
 
 def interpolate_at(rows: list[dict], target_ts: datetime, key="views") -> Optional[float]:
-    """
-    Interpolate numeric value at target_ts from chronological rows (with ts_utc and key).
-    Returns None if target is before first or after last row.
-    """
     if not rows:
         return None
-    # exact
     for r in rows:
         if r["ts_utc"] == target_ts:
-            return float(r[key] if key in r else r["views"])
+            return float(r.get(key, r["views"]))
     prev = None
     for r in rows:
         if r["ts_utc"] < target_ts:
@@ -245,9 +291,9 @@ def interpolate_at(rows: list[dict], target_ts: datetime, key="views") -> Option
             continue
         if r["ts_utc"] > target_ts and prev is not None:
             t0 = prev["ts_utc"].timestamp()
-            v0 = float(prev[key] if key in prev else prev["views"])
+            v0 = float(prev.get(key, prev["views"]))
             t1 = r["ts_utc"].timestamp()
-            v1 = float(r[key] if key in r else r["views"])
+            v1 = float(r.get(key, r["views"]))
             if t1 == t0:
                 return v1
             frac = (target_ts.timestamp() - t0) / (t1 - t0)
@@ -326,7 +372,7 @@ def sampler_loop():
     """
     Every 5-min tick:
       - fetch stats for tracked videos and store into views
-      - fetch channel ids for those videos, get channel totals (cached fetch) and insert into channel_stats
+      - fetch channel ids for those videos, get channel totals and insert into channel_stats
     """
     log.info("Sampler loop started (aligned to IST 5-min).")
     while True:
@@ -348,11 +394,10 @@ def sampler_loop():
                 if st:
                     safe_store(vid, st)
 
-            # now handle channel snapshots
+            # channel snapshots
             if YOUTUBE:
                 ch_map = fetch_channel_id_for_videos(vids)
                 unique_chs = {ch for ch in ch_map.values() if ch}
-                # fetch totals (uses caching helper)
                 ch_totals = {}
                 for ch in unique_chs:
                     try:
@@ -360,7 +405,6 @@ def sampler_loop():
                         ch_totals[ch] = total
                     except Exception:
                         ch_totals[ch] = None
-                # insert into channel_stats for each channel (tsu)
                 with conn.cursor() as cur:
                     for ch, total in ch_totals.items():
                         try:
@@ -384,7 +428,7 @@ def start_background():
             log.info("Background sampler started.")
 
 # -----------------------------
-# Helper: build display data for one video (used by detail & export)
+# Helper: build display data for one video
 # -----------------------------
 def build_video_display(vid: str):
     conn = db()
@@ -453,7 +497,7 @@ def build_video_display(vid: str):
         latest_ts_iso = latest_ts.isoformat() if latest_ts is not None else None
         latest_ts_ist = latest_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if latest_ts is not None else None
 
-        # ----- channel stats: latest snapshot, prev snapshot, 24h-ago snapshot -----
+        # channel stats
         channel_info = {
             "channel_id": None,
             "channel_total": None,
@@ -462,28 +506,23 @@ def build_video_display(vid: str):
             "channel_gain_24h": None
         }
         if YOUTUBE:
-            # get channel id
             ch_map = fetch_channel_id_for_videos([vid])
             ch = ch_map.get(vid)
             if ch:
                 channel_info["channel_id"] = ch
-                # query channel_stats for that channel (chronological)
                 cur.execute("SELECT ts_utc, total_views FROM channel_stats WHERE channel_id=%s ORDER BY ts_utc ASC", (ch,))
-                ch_rows = cur.fetchall()  # chronological
+                ch_rows = cur.fetchall()
                 if ch_rows:
                     latest_ch = ch_rows[-1]
                     channel_info["channel_total"] = latest_ch["total_views"]
-                    # prev snapshot (previous row)
                     if len(ch_rows) >= 2:
                         prev_ch = ch_rows[-2]
                         channel_info["channel_prev_total"] = prev_ch["total_views"]
                         if channel_info["channel_prev_total"] is not None and channel_info["channel_total"] is not None:
                             channel_info["channel_gain_since_prev"] = channel_info["channel_total"] - channel_info["channel_prev_total"]
-                    # 24h-ago: try interpolation on ch_rows
                     target_24 = latest_ch["ts_utc"] - timedelta(days=1)
                     interp = interpolate_at(ch_rows, target_24, key="total_views")
                     if interp is None:
-                        # fallback to latest <= target
                         ref_idx = None
                         for j in range(len(ch_rows)-1, -1, -1):
                             if ch_rows[j]["ts_utc"] <= target_24:
@@ -545,13 +584,107 @@ def build_video_display(vid: str):
     }
 
 # -----------------------------
-# Routes (two-page site)
+# Auth routes
+# -----------------------------
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if g.get("user"):
+        return redirect(url_for("home"))
+
+    if request.method == "POST":
+        username = (request.form.get("username") or "").strip()
+        password = request.form.get("password") or ""
+        next_url = request.args.get("next") or url_for("home")
+
+        if not username or not password:
+            flash("Enter username and password.", "warning")
+            return redirect(url_for("login", next=next_url))
+
+        conn = db()
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, username, password_hash, current_session_token FROM users WHERE username=%s", (username,))
+            user = cur.fetchone()
+        if not user or not check_password_hash(user["password_hash"], password):
+            flash("Invalid credentials.", "danger")
+            return redirect(url_for("login", next=next_url))
+
+        # single-device: if already has active session token, deny new login
+        if user["current_session_token"]:
+            flash("This user is already logged in on another device. Ask admin to reset or log out there.", "danger")
+            return redirect(url_for("login", next=next_url))
+
+        # create new session token
+        token = secrets.token_hex(32)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE users SET current_session_token=%s WHERE id=%s", (token, user["id"]))
+
+        session.clear()
+        session["user_id"] = user["id"]
+        session["session_token"] = token
+
+        flash("Logged in.", "success")
+        return redirect(next_url)
+
+    # GET
+    return render_template("login.html")
+
+@app.get("/logout")
+@login_required
+def logout():
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("UPDATE users SET current_session_token=NULL WHERE id=%s", (g.user["id"],))
+    session.clear()
+    flash("Logged out.", "info")
+    return redirect(url_for("login"))
+
+@app.route("/admin/users", methods=["GET", "POST"])
+def admin_users():
+    """
+    Admin add-user page.
+    Protected by ADMIN_CREATE_SECRET (env var).
+    No login required, but you must know the secret.
+    """
+    if request.method == "POST":
+        admin_secret = request.form.get("admin_secret") or ""
+        username = (request.form.get("username") or "").strip()
+        password = request.form.get("password") or ""
+        if not ADMIN_CREATE_SECRET:
+            flash("ADMIN_CREATE_SECRET not configured on server.", "danger")
+            return redirect(url_for("admin_users"))
+        if admin_secret != ADMIN_CREATE_SECRET:
+            flash("Invalid admin password.", "danger")
+            return redirect(url_for("admin_users"))
+        if not username or not password:
+            flash("Enter username and password.", "warning")
+            return redirect(url_for("admin_users"))
+
+        pw_hash = generate_password_hash(password)
+        conn = db()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO users (username, password_hash) VALUES (%s, %s)",
+                    (username, pw_hash)
+                )
+            flash(f"User '{username}' created.", "success")
+        except Exception as e:
+            log.exception("Create user failed: %s", e)
+            flash("Could not create user (maybe username already exists).", "danger")
+        return redirect(url_for("admin_users"))
+
+    # GET
+    return render_template("admin_users.html")
+
+# -----------------------------
+# Routes (protected)
 # -----------------------------
 @app.get("/healthz")
 def healthz():
     return "ok", 200
 
 @app.get("/")
+@login_required
 def home():
     conn = db()
     with conn.cursor() as cur:
@@ -561,7 +694,6 @@ def home():
     vids = []
     video_ids = [v["video_id"] for v in videos]
     ch_map = fetch_channel_id_for_videos(video_ids) if YOUTUBE and video_ids else {}
-    # warm cache for unique channels
     unique_chs = sorted({ch for ch in ch_map.values() if ch})
     for ch in unique_chs:
         _ = get_channel_total_cached(ch)
@@ -569,7 +701,6 @@ def home():
         vid = v["video_id"]
         thumb = f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
         short_title = v["name"] if len(v["name"]) <= 60 else v["name"][:57] + "..."
-        # show channel total briefly (non-critical) on home cards: fetch cached
         channel_id = ch_map.get(vid)
         channel_total = get_channel_total_cached(channel_id) if channel_id else None
         vids.append({
@@ -583,6 +714,7 @@ def home():
     return render_template("home.html", videos=vids)
 
 @app.get("/video/<video_id>")
+@login_required
 def video_detail(video_id):
     info = build_video_display(video_id)
     if info is None:
@@ -592,6 +724,7 @@ def video_detail(video_id):
     return render_template("video_detail.html", v=info)
 
 @app.post("/add_video")
+@login_required
 def add_video():
     link = (request.form.get("link") or "").strip()
     if not link:
@@ -620,6 +753,7 @@ def add_video():
     return redirect(url_for("video_detail", video_id=video_id))
 
 @app.post("/add_target/<video_id>")
+@login_required
 def add_target(video_id):
     tv = request.form.get("target_views", "").strip()
     tts = request.form.get("target_ts", "").strip()
@@ -642,6 +776,7 @@ def add_target(video_id):
     return redirect(url_for("video_detail", video_id=video_id))
 
 @app.get("/remove_target/<int:target_id>")
+@login_required
 def remove_target(target_id):
     conn = db()
     with conn.cursor() as cur:
@@ -656,6 +791,7 @@ def remove_target(target_id):
     return redirect(url_for("video_detail", video_id=vid))
 
 @app.get("/stop_tracking/<video_id>")
+@login_required
 def stop_tracking(video_id):
     conn = db()
     with conn.cursor() as cur:
@@ -670,6 +806,7 @@ def stop_tracking(video_id):
     return redirect(url_for("video_detail", video_id=video_id))
 
 @app.get("/remove_video/<video_id>")
+@login_required
 def remove_video(video_id):
     conn = db()
     with conn.cursor() as cur:
@@ -685,6 +822,7 @@ def remove_video(video_id):
     return redirect(url_for("home"))
 
 @app.get("/export/<video_id>")
+@login_required
 def export_video(video_id):
     info = build_video_display(video_id)
     if info is None:
