@@ -667,23 +667,35 @@ def logout():
 def admin_users():
     """
     Admin page:
-      - Create users (username + password)
-      - Activate / deactivate users
-    Protected by ADMIN_CREATE_SECRET (env var) on POST actions.
+      - FIRST: ask for admin password (ADMIN_CREATE_SECRET) on a separate gate screen.
+      - AFTER unlock: allow creating users + activate/deactivate, without retyping password each time.
     """
     conn = db()
 
+    # --- Handle unlock POST from the gate screen ---
     if request.method == "POST":
-        admin_secret = request.form.get("admin_secret") or ""
-        action = request.form.get("action") or "create"
+        action = request.form.get("action") or ""
+        # 1) Unlock admin mode
+        if action == "unlock":
+            admin_secret = (request.form.get("admin_secret") or "").strip()
 
-        if not ADMIN_CREATE_SECRET:
-            flash("ADMIN_CREATE_SECRET not configured on server.", "danger")
+            if not ADMIN_CREATE_SECRET:
+                flash("ADMIN_CREATE_SECRET not configured on server.", "danger")
+                return render_template("admin_gate.html")
+
+            if admin_secret != ADMIN_CREATE_SECRET:
+                flash("Invalid admin password.", "danger")
+                return render_template("admin_gate.html")
+
+            # Mark admin session as unlocked
+            session["admin_ok"] = True
+            flash("Admin mode unlocked.", "success")
             return redirect(url_for("admin_users"))
 
-        if admin_secret != ADMIN_CREATE_SECRET:
-            flash("Invalid admin password.", "danger")
-            return redirect(url_for("admin_users"))
+        # 2) Other admin actions require unlocked session
+        if not session.get("admin_ok"):
+            flash("Admin access required.", "danger")
+            return render_template("admin_gate.html")
 
         # ----- CREATE USER -----
         if action == "create":
@@ -725,7 +737,11 @@ def admin_users():
 
         return redirect(url_for("admin_users"))
 
-    # GET: fetch all users for display
+    # --- GET: if not unlocked yet, show gate screen ---
+    if not session.get("admin_ok"):
+        return render_template("admin_gate.html")
+
+    # --- GET after unlock: show full admin users list ---
     with conn.cursor() as cur:
         cur.execute("""
             SELECT
