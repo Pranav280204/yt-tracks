@@ -285,11 +285,16 @@ def safe_store(video_id: str, stats: dict):
         )
 
 def interpolate_at(rows: list[dict], target_ts: datetime, key="views") -> Optional[float]:
+    """
+    Interpolate numeric value at target_ts from chronological rows (with ts_utc and key).
+    Returns None if target is before first or after last row.
+    """
     if not rows:
         return None
+    # exact
     for r in rows:
         if r["ts_utc"] == target_ts:
-            return float(r.get(key, r["views"]))
+            return float(r[key] if key in r else r["views"])
     prev = None
     for r in rows:
         if r["ts_utc"] < target_ts:
@@ -297,9 +302,9 @@ def interpolate_at(rows: list[dict], target_ts: datetime, key="views") -> Option
             continue
         if r["ts_utc"] > target_ts and prev is not None:
             t0 = prev["ts_utc"].timestamp()
-            v0 = float(prev.get(key, prev["views"]))
+            v0 = float(prev[key] if key in prev else prev["views"])
             t1 = r["ts_utc"].timestamp()
-            v1 = float(r.get(key, r["views"]))
+            v1 = float(r[key] if key in r else r["views"])
             if t1 == t0:
                 return v1
             frac = (target_ts.timestamp() - t0) / (t1 - t0)
@@ -311,6 +316,7 @@ def interpolate_at(rows: list[dict], target_ts: datetime, key="views") -> Option
 def _time_to_seconds(time_str: str) -> int:
     h, m, s = [int(x) for x in time_str.split(":")]
     return h * 3600 + m * 60 + s
+
 
 def find_closest_tpl(prev_map: dict, time_part: str, tolerance_seconds: int = 10):
     if not prev_map:
