@@ -609,7 +609,8 @@ def login():
         conn = db()
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id, username, password_hash, current_session_token, is_active FROM users WHERE username=%s",
+                "SELECT id, username, password_hash, current_session_token, is_active "
+                "FROM users WHERE username=%s",
                 (username,)
             )
             user = cur.fetchone()
@@ -624,16 +625,16 @@ def login():
             flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
             return redirect(url_for("login", next=next_url))
 
-        # single-device: if already has active session token, deny new login
-        if user["current_session_token"]:
-            flash("This user is already logged in on another device. Ask admin to reset or log out there.", "danger")
-            return redirect(url_for("login", next=next_url))
-
-        # create new session token
+        # 🔄 NEW BEHAVIOUR: latest login wins
+        # Always issue a new session token, overwriting any previous device.
         token = secrets.token_hex(32)
         with conn.cursor() as cur:
-            cur.execute("UPDATE users SET current_session_token=%s WHERE id=%s", (token, user["id"]))
+            cur.execute(
+                "UPDATE users SET current_session_token=%s WHERE id=%s",
+                (token, user["id"])
+            )
 
+        # store in Flask session
         session.clear()
         session["user_id"] = user["id"]
         session["session_token"] = token
@@ -643,6 +644,7 @@ def login():
 
     # GET
     return render_template("login.html")
+
 
 
 @app.get("/logout")
