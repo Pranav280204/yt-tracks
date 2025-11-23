@@ -71,7 +71,7 @@
                 <th>Username</th>
                 <th>Status</th>
                 <th>Logged in?</th>
-                <th style="width: 160px;">Actions</th>
+                <th style="width: 220px;">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -94,16 +94,27 @@
                     {% endif %}
                   </td>
                   <td>
-                    <form method="POST" action="{{ url_for('admin_users') }}" class="d-flex gap-1 align-items-center">
-                      <input type="hidden" name="action" value="toggle_active">
-                      <input type="hidden" name="user_id" value="{{ u.id }}">
-                      <input type="hidden" name="new_state" value="{{ 1 if not u.is_active else 0 }}">
-                      {% if u.is_active %}
-                        <button class="btn btn-sm btn-outline-danger" type="submit">Deactivate</button>
-                      {% else %}
-                        <button class="btn btn-sm btn-outline-success" type="submit">Activate</button>
-                      {% endif %}
-                    </form>
+                    <div class="d-flex flex-wrap gap-1">
+                      <!-- Toggle Active -->
+                      <form method="POST" action="{{ url_for('admin_users') }}">
+                        <input type="hidden" name="action" value="toggle_active">
+                        <input type="hidden" name="user_id" value="{{ u.id }}">
+                        <input type="hidden" name="new_state" value="{{ 1 if not u.is_active else 0 }}">
+                        {% if u.is_active %}
+                          <button class="btn btn-sm btn-outline-danger" type="submit">Deactivate</button>
+                        {% else %}
+                          <button class="btn btn-sm btn-outline-success" type="submit">Activate</button>
+                        {% endif %}
+                      </form>
+
+                      <!-- Reset Device -->
+                      <form method="POST" action="{{ url_for('admin_users') }}"
+                            onsubmit="return confirm('Reset device lock? User will need to log in again on a new device.');">
+                        <input type="hidden" name="action" value="reset_device">
+                        <input type="hidden" name="user_id" value="{{ u.id }}">
+                        <button class="btn btn-sm btn-outline-primary" type="submit">Reset Device</button>
+                      </form>
+                    </div>
                   </td>
                 </tr>
               {% endfor %}
