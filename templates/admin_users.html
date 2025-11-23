@@ -39,14 +39,10 @@
     <div class="card-body">
       <h5 class="card-title mb-2">Create new user</h5>
       <p class="text-muted small mb-3">
-        Enter the <strong>admin password</strong> (only you know this) and the new user credentials.
+        Admin mode is unlocked for this session. You can create new login credentials below.
       </p>
       <form method="POST" action="{{ url_for('admin_users') }}">
         <input type="hidden" name="action" value="create">
-        <div class="mb-2">
-          <label class="form-label">Admin password</label>
-          <input class="form-control form-control-sm" type="password" name="admin_secret" required>
-        </div>
         <div class="mb-2">
           <label class="form-label">New username</label>
           <input class="form-control form-control-sm" type="text" name="username" required>
@@ -75,7 +71,7 @@
                 <th>Username</th>
                 <th>Status</th>
                 <th>Logged in?</th>
-                <th style="width: 190px;">Actions</th>
+                <th style="width: 160px;">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -102,8 +98,6 @@
                       <input type="hidden" name="action" value="toggle_active">
                       <input type="hidden" name="user_id" value="{{ u.id }}">
                       <input type="hidden" name="new_state" value="{{ 1 if not u.is_active else 0 }}">
-                      <input class="form-control form-control-sm" style="max-width:110px"
-                             type="password" name="admin_secret" placeholder="Admin pwd" required>
                       {% if u.is_active %}
                         <button class="btn btn-sm btn-outline-danger" type="submit">Deactivate</button>
                       {% else %}
