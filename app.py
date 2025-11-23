@@ -720,15 +720,18 @@ def logout():
 def admin_users():
     """
     Admin page:
-      - FIRST: ask for admin password (ADMIN_CREATE_SECRET) on a separate gate screen.
-      - AFTER unlock: allow creating users + activate/deactivate, without retyping password each time.
+      - Step 1: Ask for admin password (ADMIN_CREATE_SECRET) on a separate gate page.
+      - Step 2: After unlocked (session['admin_ok'] = True), allow:
+          * Create users
+          * Activate / deactivate users
+          * Reset device lock for a user
     """
     conn = db()
 
-    # --- Handle unlock POST from the gate screen ---
     if request.method == "POST":
         action = request.form.get("action") or ""
-        # 1) Unlock admin mode
+
+        # 1) Unlock admin mode (from admin_gate.html)
         if action == "unlock":
             admin_secret = (request.form.get("admin_secret") or "").strip()
 
@@ -740,20 +743,21 @@ def admin_users():
                 flash("Invalid admin password.", "danger")
                 return render_template("admin_gate.html")
 
-            # Mark admin session as unlocked
+            # mark admin session as unlocked
             session["admin_ok"] = True
             flash("Admin mode unlocked.", "success")
             return redirect(url_for("admin_users"))
 
-        # 2) Other admin actions require unlocked session
+        # For all other actions, require unlocked admin session
         if not session.get("admin_ok"):
             flash("Admin access required.", "danger")
             return render_template("admin_gate.html")
 
-        # ----- CREATE USER -----
+        # 2) CREATE USER
         if action == "create":
             username = (request.form.get("username") or "").strip()
             password = request.form.get("password") or ""
+
             if not username or not password:
                 flash("Enter username and password.", "warning")
                 return redirect(url_for("admin_users"))
@@ -762,7 +766,8 @@ def admin_users():
             try:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "INSERT INTO users (username, password_hash, is_active) VALUES (%s, %s, TRUE)",
+                        "INSERT INTO users (username, password_hash, is_active) "
+                        "VALUES (%s, %s, TRUE)",
                         (username, pw_hash)
                     )
                 flash(f"User '{username}' created.", "success")
@@ -770,7 +775,7 @@ def admin_users():
                 log.exception("Create user failed: %s", e)
                 flash("Could not create user (maybe username already exists).", "danger")
 
-        # ----- TOGGLE ACTIVE (activate/deactivate) -----
+        # 3) TOGGLE ACTIVE (activate / deactivate)
         elif action == "toggle_active":
             try:
                 user_id = int(request.form.get("user_id") or "0")
@@ -782,19 +787,45 @@ def admin_users():
             is_active = True if new_state == "1" else False
             try:
                 with conn.cursor() as cur:
-                    cur.execute("UPDATE users SET is_active=%s WHERE id=%s", (is_active, user_id))
+                    cur.execute(
+                        "UPDATE users SET is_active=%s WHERE id=%s",
+                        (is_active, user_id)
+                    )
                 flash(("Activated" if is_active else "Deactivated") + f" user id {user_id}.", "info")
             except Exception as e:
                 log.exception("Toggle active failed: %s", e)
                 flash("Could not update user status.", "danger")
 
+        # 4) RESET DEVICE (clear device lock)
+        elif action == "reset_device":
+            try:
+                user_id = int(request.form.get("user_id") or "0")
+            except ValueError:
+                flash("Invalid user id.", "danger")
+                return redirect(url_for("admin_users"))
+
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        UPDATE users
+                        SET device_token = NULL,
+                            device_ua = NULL,
+                            device_info = NULL
+                        WHERE id = %s
+                    """, (user_id,))
+                flash(f"Device lock reset for user id {user_id}.", "info")
+            except Exception as e:
+                log.exception("Reset device failed: %s", e)
+                flash("Could not reset device.", "danger")
+
         return redirect(url_for("admin_users"))
 
-    # --- GET: if not unlocked yet, show gate screen ---
+    # ---------- GET ----------
+    # If admin mode not unlocked yet -> show gate page
     if not session.get("admin_ok"):
         return render_template("admin_gate.html")
 
-    # --- GET after unlock: show full admin users list ---
+    # If unlocked, show full user list
     with conn.cursor() as cur:
         cur.execute("""
             SELECT
@@ -808,6 +839,7 @@ def admin_users():
         users = cur.fetchall()
 
     return render_template("admin_users.html", users=users)
+
 
 
 # -----------------------------
