@@ -107,7 +107,7 @@ def db():
 def init_db():
     conn = db()
     with conn.cursor() as cur:
-        # Users for auth
+        # Users for login
         cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
           id SERIAL PRIMARY KEY,
@@ -117,6 +117,7 @@ def init_db():
         );
         """)
 
+        # Tracked videos
         cur.execute("""
         CREATE TABLE IF NOT EXISTS video_list (
           video_id    TEXT PRIMARY KEY,
@@ -124,6 +125,8 @@ def init_db():
           is_tracking BOOLEAN NOT NULL DEFAULT TRUE
         );
         """)
+
+        # Per-video samples (5-min snapshots)
         cur.execute("""
         CREATE TABLE IF NOT EXISTS views (
           video_id  TEXT NOT NULL,
@@ -135,6 +138,8 @@ def init_db():
           FOREIGN KEY (video_id) REFERENCES video_list(video_id) ON DELETE CASCADE
         );
         """)
+
+        # Targets for each video
         cur.execute("""
         CREATE TABLE IF NOT EXISTS targets (
           id           SERIAL PRIMARY KEY,
@@ -144,14 +149,17 @@ def init_db():
           note         TEXT
         );
         """)
+
+        # Channel-level snapshots (total channel views over time)
         cur.execute("""
         CREATE TABLE IF NOT EXISTS channel_stats (
-          channel_id TEXT NOT NULL,
-          ts_utc TIMESTAMPTZ NOT NULL,
+          channel_id  TEXT NOT NULL,
+          ts_utc      TIMESTAMPTZ NOT NULL,
           total_views BIGINT,
           PRIMARY KEY (channel_id, ts_utc)
         );
         """)
+
     log.info("DB schema ready.")
 
 # -----------------------------
@@ -602,21 +610,24 @@ def login():
 
         conn = db()
         with conn.cursor() as cur:
-            cur.execute("SELECT id, username, password_hash, current_session_token FROM users WHERE username=%s", (username,))
+            cur.execute(
+                "SELECT id, username, password_hash, current_session_token FROM users WHERE username=%s",
+                (username,)
+            )
             user = cur.fetchone()
+
         if not user or not check_password_hash(user["password_hash"], password):
             flash("Invalid credentials.", "danger")
             return redirect(url_for("login", next=next_url))
 
-        # single-device: if already has active session token, deny new login
-        if user["current_session_token"]:
-            flash("This user is already logged in on another device. Ask admin to reset or log out there.", "danger")
-            return redirect(url_for("login", next=next_url))
-
-        # create new session token
+        # single-device: always rotate session token on login
+        # (last login wins, old device becomes invalid automatically)
         token = secrets.token_hex(32)
         with conn.cursor() as cur:
-            cur.execute("UPDATE users SET current_session_token=%s WHERE id=%s", (token, user["id"]))
+            cur.execute(
+                "UPDATE users SET current_session_token=%s WHERE id=%s",
+                (token, user["id"])
+            )
 
         session.clear()
         session["user_id"] = user["id"]
