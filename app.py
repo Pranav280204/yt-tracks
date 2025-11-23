@@ -50,6 +50,22 @@ IST = ZoneInfo("Asia/Kolkata")
 API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 POSTGRES_URL = os.getenv("DATABASE_URL")
 ADMIN_CREATE_SECRET = os.getenv("ADMIN_CREATE_SECRET", "")  # master password for creating users
+def require_admin_secret_from_form(form, redirect_endpoint, **redirect_kwargs):
+    """
+    Check admin_secret in form against ADMIN_CREATE_SECRET.
+    If wrong/missing -> flash + redirect.
+    If ok or secret not set -> return None.
+    """
+    if not ADMIN_CREATE_SECRET:
+        # If you haven't set it, don't block (or change this to always block if you prefer).
+        return None
+
+    admin_secret = (form.get("admin_secret") or "").strip()
+    if admin_secret != ADMIN_CREATE_SECRET:
+        flash("Admin password required or incorrect.", "danger")
+        return redirect(url_for(redirect_endpoint, **redirect_kwargs))
+
+    return None
 
 CHANNEL_CACHE_TTL = int(os.getenv("CHANNEL_CACHE_TTL", "50"))  # seconds; < sampler interval
 if not POSTGRES_URL:
@@ -985,9 +1001,17 @@ def stop_tracking(video_id):
         flash(("Resumed" if new_state else "Paused") + f" tracking: {row['name']}", "info")
     return redirect(url_for("video_detail", video_id=video_id))
 
-@app.get("/remove_video/<video_id>")
+@app.post("/remove_video/<video_id>")
+@login_required
+@app.post("/remove_video/<video_id>")
 @login_required
 def remove_video(video_id):
+    # ✅ Require admin password to remove any video
+    admin_secret = (request.form.get("admin_secret") or "").strip()
+    if ADMIN_CREATE_SECRET and admin_secret != ADMIN_CREATE_SECRET:
+        flash("Admin password required or incorrect to remove videos.", "danger")
+        return redirect(url_for("video_detail", video_id=video_id))
+
     conn = db()
     with conn.cursor() as cur:
         cur.execute("SELECT name FROM video_list WHERE video_id=%s", (video_id,))
@@ -1000,6 +1024,8 @@ def remove_video(video_id):
         cur.execute("DELETE FROM video_list WHERE video_id=%s", (video_id,))
         flash(f"Removed '{name}' and all data.", "success")
     return redirect(url_for("home"))
+
+
 
 @app.get("/export/<video_id>")
 @login_required
