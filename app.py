@@ -209,16 +209,28 @@ def get_current_user():
     token = session.get("session_token")
     if not uid or not token:
         return None
+
     conn = db()
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, username, current_session_token FROM users WHERE id=%s",
+            "SELECT id, username, current_session_token, is_active "
+            "FROM users WHERE id=%s",
             (uid,)
         )
         u = cur.fetchone()
-    if not u or not u["current_session_token"] or u["current_session_token"] != token:
+
+    # If user doesn’t exist, token changed, or user is deactivated → logout immediately
+    if (
+        not u
+        or not u["current_session_token"]
+        or u["current_session_token"] != token
+        or not u["is_active"]       # 👈 NEW: deactivated user triggers logout
+    ):
+        session.clear()
         return None
+
     return u
+
 
 @app.before_request
 def load_user():
@@ -746,6 +758,7 @@ def logout():
     flash("Logged out.", "info")
     return redirect(url_for("login"))
 
+
 @app.route("/admin/users", methods=["GET", "POST"])
 def admin_users():
     """
@@ -755,6 +768,7 @@ def admin_users():
           * Create users
           * Activate / deactivate users
           * Reset device lock for a user
+          * Force logout a user
     """
     conn = db()
 
@@ -848,6 +862,25 @@ def admin_users():
                 log.exception("Reset device failed: %s", e)
                 flash("Could not reset device.", "danger")
 
+        # 5) FORCE LOGOUT (invalidate current session token)
+        elif action == "force_logout":
+            try:
+                user_id = int(request.form.get("user_id") or "0")
+            except ValueError:
+                flash("Invalid user id.", "danger")
+                return redirect(url_for("admin_users"))
+
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "UPDATE users SET current_session_token = NULL WHERE id = %s",
+                        (user_id,)
+                    )
+                flash(f"User id {user_id} has been logged out.", "info")
+            except Exception as e:
+                log.exception("Force logout failed: %s", e)
+                flash("Could not log out user.", "danger")
+
         return redirect(url_for("admin_users"))
 
     # ---------- GET ----------
@@ -869,6 +902,7 @@ def admin_users():
         users = cur.fetchall()
 
     return render_template("admin_users.html", users=users)
+
 
 
 
