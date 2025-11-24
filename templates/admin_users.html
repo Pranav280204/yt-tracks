@@ -71,7 +71,7 @@
                 <th>Username</th>
                 <th>Status</th>
                 <th>Logged in?</th>
-                <th style="width: 220px;">Actions</th>
+                <th style="width: 260px;">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -113,6 +113,17 @@
                         <input type="hidden" name="action" value="reset_device">
                         <input type="hidden" name="user_id" value="{{ u.id }}">
                         <button class="btn btn-sm btn-outline-primary" type="submit">Reset Device</button>
+                      </form>
+
+                      <!-- Force Logout -->
+                      <form method="POST" action="{{ url_for('admin_users') }}"
+                            onsubmit="return confirm('Force logout this user? They will be logged out on next request.');">
+                        <input type="hidden" name="action" value="force_logout">
+                        <input type="hidden" name="user_id" value="{{ u.id }}">
+                        <button class="btn btn-sm btn-outline-secondary" type="submit"
+                                {% if not u.is_logged_in %}disabled{% endif %}>
+                          Force logout
+                        </button>
                       </form>
                     </div>
                   </td>
