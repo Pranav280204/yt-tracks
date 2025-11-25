@@ -563,41 +563,50 @@ def build_video_display(vid: str):
                 prev_map = date_time_map.get(prev_date_str, {})
                 display_rows = []
                 for tpl in processed:
-                    ts_ist, views, gain_5min, hourly_gain, gain_24h = tpl
-                    time_part = ts_ist.split(" ")[1]
-                    prev_tpl_for_pct = prev_map.get(time_part)
-                    if prev_tpl_for_pct is None:
-                        prev_tpl_for_pct = find_closest_tpl(prev_map, time_part, tolerance_seconds=10)
-                    prev_gain24_for_pct = prev_tpl_for_pct[4] if prev_tpl_for_pct else None
-                    pct24 = None
-                    if prev_gain24_for_pct not in (None, 0):
-                        try:
-                            pct24 = round(((gain_24h or 0) - prev_gain24_for_pct) / prev_gain24_for_pct * 100, 2)
-                        except Exception:
-                            pct24 = None
-                   # --- new: projected (min) views using yesterday 22:30 (or closest earlier up to 5 min) ---
-projected = None
-prev_2230_tpl = find_closest_prev(prev_map, "22:30:00", max_earlier_seconds=300)
-if prev_2230_tpl is not None and pct24 not in (None,):
-    prev_views_2230 = prev_2230_tpl[1]
-    prev_gain24_2230 = prev_2230_tpl[4]
-    if prev_views_2230 is not None and prev_gain24_2230 not in (None, 0):
+    ts_ist, views, gain_5min, hourly_gain, gain_24h = tpl
+    time_part = ts_ist.split(" ")[1]
+
+    # find previous-day tuple allowing small time drift (tolerance) for pct24 matching
+    prev_tpl_for_pct = prev_map.get(time_part)
+    if prev_tpl_for_pct is None:
+        prev_tpl_for_pct = find_closest_tpl(prev_map, time_part, tolerance_seconds=10)
+
+    prev_gain24_for_pct = prev_tpl_for_pct[4] if prev_tpl_for_pct else None
+
+    pct24 = None
+    if prev_gain24_for_pct not in (None, 0):
         try:
-            projected_val = prev_views_2230 + prev_gain24_2230 * (1 + (pct24 / 100.0))
-            projected = int(round(projected_val))
+            pct24 = round(((gain_24h or 0) - prev_gain24_for_pct) / prev_gain24_for_pct * 100, 2)
         except Exception:
-            projected = None
-                    display_rows.append((ts_ist, views, gain_5min, hourly_gain, gain_24h, pct24, projected))
-                daily[date_str] = list(reversed(display_rows))
+            pct24 = None
 
-        latest_views = None
-        latest_ts = None
-        if all_rows:
-            latest_views = all_rows[-1]["views"]
-            latest_ts = all_rows[-1]["ts_utc"]
+    # --- new: projected (min) views using yesterday 22:30 (or closest earlier up to 5 min) ---
+    projected = None
+    prev_2230_tpl = find_closest_prev(prev_map, "22:30:00", max_earlier_seconds=300)
+    if prev_2230_tpl is not None and pct24 not in (None,):
+        prev_views_2230 = prev_2230_tpl[1]
+        prev_gain24_2230 = prev_2230_tpl[4]
+        if prev_views_2230 is not None and prev_gain24_2230 not in (None, 0):
+            try:
+                projected_val = prev_views_2230 + prev_gain24_2230 * (1 + (pct24 / 100.0))
+                projected = int(round(projected_val))
+            except Exception:
+                projected = None
 
-        latest_ts_iso = latest_ts.isoformat() if latest_ts is not None else None
-        latest_ts_ist = latest_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if latest_ts is not None else None
+    # append row (keep chronological order)
+    display_rows.append((ts_ist, views, gain_5min, hourly_gain, gain_24h, pct24, projected))
+
+daily[date_str] = list(reversed(display_rows))
+
+latest_views = None
+latest_ts = None
+if all_rows:
+    latest_views = all_rows[-1]["views"]
+    latest_ts = all_rows[-1]["ts_utc"]
+
+latest_ts_iso = latest_ts.isoformat() if latest_ts is not None else None
+latest_ts_ist = latest_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if latest_ts is not None else None
+
 
         # channel stats
         channel_info = {
