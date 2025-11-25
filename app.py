@@ -1020,10 +1020,27 @@ def remove_target(target_id):
     flash("Target removed.", "info")
     return redirect(url_for("video_detail", video_id=vid))
 
-@app.get("/stop_tracking/<video_id>")
-@login_required
+@app.route("/stop_tracking/<video_id>", methods=("GET", "POST"))
 def stop_tracking(video_id):
+    """
+    Toggle tracking state. Accepts GET (link) and POST (form with optional admin_secret).
+    If ADMIN_CREATE_SECRET is set, require either session['admin_ok'] or the posted admin_secret.
+    """
     conn = db()
+
+    # If this is a POST from the UI, optionally require admin password (unless admin already unlocked)
+    if request.method == "POST":
+        # if admin mode already unlocked in session, skip password check
+        if not session.get("admin_ok"):
+            admin_secret = (request.form.get("admin_secret") or "").strip()
+            if not ADMIN_CREATE_SECRET:
+                flash("Admin password not configured on server.", "danger")
+                return redirect(url_for("video_detail", video_id=video_id))
+            if admin_secret != ADMIN_CREATE_SECRET:
+                flash("Incorrect admin password.", "danger")
+                return redirect(url_for("video_detail", video_id=video_id))
+
+    # Toggle tracking state
     with conn.cursor() as cur:
         cur.execute("SELECT is_tracking, name FROM video_list WHERE video_id=%s", (video_id,))
         row = cur.fetchone()
@@ -1033,7 +1050,10 @@ def stop_tracking(video_id):
         new_state = not bool(row["is_tracking"])
         cur.execute("UPDATE video_list SET is_tracking=%s WHERE video_id=%s", (new_state, video_id))
         flash(("Resumed" if new_state else "Paused") + f" tracking: {row['name']}", "info")
+
+    # Redirect back to the video detail page (or index if you prefer)
     return redirect(url_for("video_detail", video_id=video_id))
+
 
 @app.post("/remove_video/<video_id>")
 @login_required
