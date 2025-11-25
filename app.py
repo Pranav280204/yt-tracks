@@ -428,12 +428,23 @@ def find_closest_prev(prev_map: dict, time_part: str, max_earlier_seconds: int =
     return best
 
 def process_gains(rows_asc: list[dict]):
+    """
+    Input: rows ascending by ts_utc (chronological)
+    Output list of tuples:
+      (ts_ist_str, views, gain_5min, hourly_gain, gain_24h, hourly_pct_change)
+
+    hourly_pct_change = percent change of hourly_gain vs previous row's hourly_gain.
+    """
     out = []
     for i, r in enumerate(rows_asc):
         ts_utc = r["ts_utc"]
         ts_ist = ts_utc.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S")
         views = r["views"]
+
+        # gain in last 5 minutes
         gain = None if i == 0 else views - rows_asc[i - 1]["views"]
+
+        # hourly: latest row <= ts - 1h
         target_h = ts_utc - timedelta(hours=1)
         ref_idx_h = None
         for j in range(i, -1, -1):
@@ -441,6 +452,8 @@ def process_gains(rows_asc: list[dict]):
                 ref_idx_h = j
                 break
         hourly = None if ref_idx_h is None else (views - rows_asc[ref_idx_h]["views"])
+
+        # 24h: try interpolation first, fallback to latest <= target
         target_d = ts_utc - timedelta(days=1)
         interp = interpolate_at(rows_asc, target_d)
         if interp is None:
@@ -452,8 +465,32 @@ def process_gains(rows_asc: list[dict]):
             gain_24h = None if ref_idx_d is None else (views - rows_asc[ref_idx_d]["views"])
         else:
             gain_24h = views - int(round(interp))
-        out.append((ts_ist, views, gain, hourly, gain_24h))
+
+        # hourly percent change vs previous row's hourly (if available)
+        hourly_pct_change = None
+        if i > 0:
+            # compute previous row's hourly similarly
+            prev_idx = i - 1
+            prev_ts_utc = rows_asc[prev_idx]["ts_utc"]
+            prev_views = rows_asc[prev_idx]["views"]
+            # find prev hourly reference (<= prev_ts -1h)
+            prev_target_h = prev_ts_utc - timedelta(hours=1)
+            prev_ref_idx_h = None
+            for j in range(prev_idx, -1, -1):
+                if rows_asc[j]["ts_utc"] <= prev_target_h:
+                    prev_ref_idx_h = j
+                    break
+            prev_hourly = None if prev_ref_idx_h is None else (prev_views - rows_asc[prev_ref_idx_h]["views"])
+
+            if hourly is not None and prev_hourly not in (None, 0):
+                try:
+                    hourly_pct_change = round(((hourly - prev_hourly) / prev_hourly) * 100, 2)
+                except Exception:
+                    hourly_pct_change = None
+
+        out.append((ts_ist, views, gain, hourly, gain_24h, hourly_pct_change))
     return out
+
 
 # -----------------------------
 # Background sampler + channel snapshots
@@ -570,15 +607,16 @@ def build_video_display(vid: str):
             # iterate dates newest-first for display
             dates_sorted = sorted(grouped.keys(), reverse=True)
             daily = {}
-            for date_str in dates_sorted:
-                processed = grouped[date_str]  # chronological within this day (as produced by process_gains)
+                       for date_str in dates_sorted:
+                processed = grouped[date_str]  # chronological within this day
                 prev_date_obj = (datetime.fromisoformat(date_str).date() - timedelta(days=1))
                 prev_date_str = prev_date_obj.isoformat()
                 prev_map = date_time_map.get(prev_date_str, {})
 
                 display_rows = []
                 for tpl in processed:
-                    ts_ist, views, gain_5min, hourly_gain, gain_24h = tpl
+                    # process_gains returns: (ts_ist, views, gain_5min, hourly_gain, gain_24h, hourly_pct)
+                    ts_ist, views, gain_5min, hourly_gain, gain_24h, hourly_pct = tpl
                     time_part = ts_ist.split(" ")[1]
 
                     # find previous-day tuple allowing small time drift (tolerance) for pct24 matching
@@ -595,11 +633,9 @@ def build_video_display(vid: str):
                         except Exception:
                             pct24 = None
 
-                    # --- projected (using yesterday 22:30 or closest earlier ≤ max_earlier_seconds) ---
+                    # projected logic: use yesterday 22:30 (or closest earlier up to 5 min)
                     projected = None
-                    # prefer exact "22:30:00", otherwise closest earlier within 5 minutes (300s)
                     prev_2230_tpl = find_closest_prev(prev_map, "22:30:00", max_earlier_seconds=300)
-
                     if prev_2230_tpl is not None and pct24 not in (None,):
                         prev_views_2230 = prev_2230_tpl[1]
                         prev_gain24_2230 = prev_2230_tpl[4]
@@ -610,10 +646,12 @@ def build_video_display(vid: str):
                             except Exception:
                                 projected = None
 
-                    display_rows.append((ts_ist, views, gain_5min, hourly_gain, gain_24h, pct24, projected))
+                    # append display tuple (this has 8 elements: last two are pct24 and projected, plus hourly_pct)
+                    display_rows.append((ts_ist, views, gain_5min, hourly_gain, gain_24h, pct24, projected, hourly_pct))
 
                 # show newest-first in templates (they expect newest first)
                 daily[date_str] = list(reversed(display_rows))
+
 
             # latest values
             latest_views = all_rows[-1]["views"]
@@ -1153,15 +1191,16 @@ def export_video(video_id):
     for date in dates:
         day_rows = list(reversed(info["daily"][date]))
         for tpl in day_rows:
-            ts, views, gain5, hourly, gain24, pct24, projected = tpl
+            ts, views, gain5, hourly, gain24, pct24,projected,hourly_pct = tpl
             rows_for_df.append({
-                "Time (IST)": ts,
-                "Views": views,
-                "Gain (5 min)": gain5 if gain5 is not None else "",
-                "Hourly Growth": hourly if hourly is not None else "",
-                "Gain (24 h)": gain24 if gain24 is not None else "",
-                "Change 24h vs prev day (%)": pct24 if pct24 is not None else "",
-                "Projected (min) views": projected if projected is not None else ""
+        "Time (IST)": ts,
+        "Views": views,
+        "Gain (5 min)": gain5 if gain5 is not None else "",
+        "Hourly Growth": hourly if hourly is not None else "",
+        "Hourly Growth % change": (f"{hourly_pct}%" if hourly_pct is not None else ""),
+        "Gain (24 h)": gain24 if gain24 is not None else "",
+        "Change 24h vs prev day (%)": pct24 if pct24 is not None else "",
+        "Projected (min) views": projected if projected is not None else ""
             })
     df_views = pd.DataFrame(rows_for_df)
     conn = db()
