@@ -390,6 +390,43 @@ def find_closest_tpl(prev_map: dict, time_part: str, tolerance_seconds: int = 10
         return best
     return None
 
+def find_closest_prev(prev_map: dict, time_part: str, max_earlier_seconds: int = 300):
+    """
+    From prev_map (time_str -> tpl), return the tuple whose time is the closest
+    earlier-or-equal to time_part, but only if it is within max_earlier_seconds
+    earlier. If exact match exists, returns it. If none found, returns None.
+
+    Example: time_part="22:30:00", will prefer "22:30:00" if present,
+    otherwise "22:25:00" (or "22:26/22:27/...") if within max_earlier_seconds.
+    """
+    if not prev_map:
+        return None
+    try:
+        target_secs = _time_to_seconds(time_part)
+    except Exception:
+        return None
+
+    # exact
+    if time_part in prev_map:
+        return prev_map[time_part]
+
+    best = None
+    best_delta = None
+    for k, tpl in prev_map.items():
+        try:
+            s = _time_to_seconds(k)
+        except Exception:
+            continue
+        # only consider earlier-or-equal times
+        if s > target_secs:
+            continue
+        delta = target_secs - s
+        if delta <= max_earlier_seconds:
+            if best is None or delta < best_delta:
+                best = tpl
+                best_delta = delta
+    return best
+
 def process_gains(rows_asc: list[dict]):
     out = []
     for i, r in enumerate(rows_asc):
@@ -538,18 +575,18 @@ def build_video_display(vid: str):
                             pct24 = round(((gain_24h or 0) - prev_gain24_for_pct) / prev_gain24_for_pct * 100, 2)
                         except Exception:
                             pct24 = None
-                    # projection using yesterday 22:30 as before
-                    projected = None
-                    prev_2230_tpl = prev_map.get("22:30:00")
-                    if prev_2230_tpl is not None and pct24 not in (None,):
-                        prev_views_2230 = prev_2230_tpl[1]
-                        prev_gain24_2230 = prev_2230_tpl[4]
-                        if prev_views_2230 is not None and prev_gain24_2230 not in (None, 0):
-                            try:
-                                projected_val = prev_views_2230 + prev_gain24_2230 * (1 + (pct24 / 100.0))
-                                projected = int(round(projected_val))
-                            except Exception:
-                                projected = None
+                   # --- new: projected (min) views using yesterday 22:30 (or closest earlier up to 5 min) ---
+projected = None
+prev_2230_tpl = find_closest_prev(prev_map, "22:30:00", max_earlier_seconds=300)
+if prev_2230_tpl is not None and pct24 not in (None,):
+    prev_views_2230 = prev_2230_tpl[1]
+    prev_gain24_2230 = prev_2230_tpl[4]
+    if prev_views_2230 is not None and prev_gain24_2230 not in (None, 0):
+        try:
+            projected_val = prev_views_2230 + prev_gain24_2230 * (1 + (pct24 / 100.0))
+            projected = int(round(projected_val))
+        except Exception:
+            projected = None
                     display_rows.append((ts_ist, views, gain_5min, hourly_gain, gain_24h, pct24, projected))
                 daily[date_str] = list(reversed(display_rows))
 
