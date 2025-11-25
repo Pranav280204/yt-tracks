@@ -295,13 +295,17 @@
                       <th>Total Views</th>
                       <th>Gain (5 min)</th>
                       <th>Hourly Growth</th>
+                      <th>Hourly Growth % change</th>
                       <th>24h Gain ⓘ</th>
                       <th>Change 24h vs prev day (%)</th>
                       <th>Projected (min) views</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {% for ts, views, gain, hourly, gain24, pct24, projected in rows %}
+                    {# rows must be tuples of 8 elements in this order:
+                       ts, views, gain5, hourly, gain24, pct24, projected, hourly_pct
+                       (If your backend returns a different order, adapt accordingly.) #}
+                    {% for ts, views, gain, hourly, gain24, pct24, projected, hourly_pct in rows %}
                       <tr>
                         <td class="mono">{{ ts }}</td>
                         <td class="mono">{{ "{:,}".format(views) }}</td>
@@ -314,6 +318,12 @@
                           {% if hourly is none %}<span class="gain-null">—</span>
                           {% elif hourly >= 0 %}<span class="gain-pos">+{{ "{:,}".format(hourly) }}</span>
                           {% else %}<span class="gain-neg">{{ "{:,}".format(hourly) }}</span>{% endif %}
+                        </td>
+                        <td>
+                          {% if hourly_pct is none %}<span class="gain-null">—</span>
+                          {% elif hourly_pct > 0 %}<span class="gain-pos">+{{ ('{:.2f}'.format(hourly_pct)) }}%</span>
+                          {% elif hourly_pct < 0 %}<span class="gain-neg">{{ ('{:.2f}'.format(hourly_pct)) }}%</span>
+                          {% else %}<span>0.00%</span>{% endif %}
                         </td>
                         <td>
                           {% if gain24 is none %}<span class="gain-null">—</span>
