@@ -592,34 +592,31 @@ def build_video_display(vid: str):
         latest_ts_ist = None
 
         if all_rows:
-            # processed_all: list of tuples (ts_ist_str, views, gain_5min, hourly_gain, gain_24h)
             processed_all = process_gains(all_rows)
 
-            # build maps: grouped by date and date->time->tpl for prev-day lookups
             grouped: dict = {}
             date_time_map: dict = {}
             for tpl in processed_all:
-                ts_ist = tpl[0]  # "YYYY-MM-DD HH:MM:SS"
+                ts_ist = tpl[0]
                 date_str, time_part = ts_ist.split(" ")
                 grouped.setdefault(date_str, []).append(tpl)
                 date_time_map.setdefault(date_str, {})[time_part] = tpl
 
-            # iterate dates newest-first for display
             dates_sorted = sorted(grouped.keys(), reverse=True)
             daily = {}
-                       for date_str in dates_sorted:
-                processed = grouped[date_str]  # chronological within this day
+
+            # ✅ FIXED INDENTATION
+            for date_str in dates_sorted:
+                processed = grouped[date_str]
                 prev_date_obj = (datetime.fromisoformat(date_str).date() - timedelta(days=1))
                 prev_date_str = prev_date_obj.isoformat()
                 prev_map = date_time_map.get(prev_date_str, {})
 
                 display_rows = []
                 for tpl in processed:
-                    # process_gains returns: (ts_ist, views, gain_5min, hourly_gain, gain_24h, hourly_pct)
                     ts_ist, views, gain_5min, hourly_gain, gain_24h, hourly_pct = tpl
                     time_part = ts_ist.split(" ")[1]
 
-                    # find previous-day tuple allowing small time drift (tolerance) for pct24 matching
                     prev_tpl_for_pct = prev_map.get(time_part)
                     if prev_tpl_for_pct is None:
                         prev_tpl_for_pct = find_closest_tpl(prev_map, time_part, tolerance_seconds=10)
@@ -633,7 +630,6 @@ def build_video_display(vid: str):
                         except Exception:
                             pct24 = None
 
-                    # projected logic: use yesterday 22:30 (or closest earlier up to 5 min)
                     projected = None
                     prev_2230_tpl = find_closest_prev(prev_map, "22:30:00", max_earlier_seconds=300)
                     if prev_2230_tpl is not None and pct24 not in (None,):
@@ -646,20 +642,18 @@ def build_video_display(vid: str):
                             except Exception:
                                 projected = None
 
-                    # append display tuple (this has 8 elements: last two are pct24 and projected, plus hourly_pct)
-                    display_rows.append((ts_ist, views, gain_5min, hourly_gain, gain_24h, pct24, projected, hourly_pct))
+                    display_rows.append(
+                        (ts_ist, views, gain_5min, hourly_gain, gain_24h, pct24, projected, hourly_pct)
+                    )
 
-                # show newest-first in templates (they expect newest first)
                 daily[date_str] = list(reversed(display_rows))
 
-
-            # latest values
             latest_views = all_rows[-1]["views"]
             latest_ts = all_rows[-1]["ts_utc"]
             latest_ts_iso = latest_ts.isoformat() if latest_ts is not None else None
             latest_ts_ist = latest_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if latest_ts is not None else None
 
-        # channel stats: channel_id, total, previous total, gain since prev, gain 24h
+        # channel info -------------------
         channel_info = {
             "channel_id": None,
             "channel_total": None,
@@ -667,6 +661,7 @@ def build_video_display(vid: str):
             "channel_gain_since_prev": None,
             "channel_gain_24h": None
         }
+
         if YOUTUBE:
             ch_map = fetch_channel_id_for_videos([vid])
             ch = ch_map.get(vid)
@@ -681,9 +676,10 @@ def build_video_display(vid: str):
                         prev_ch = ch_rows[-2]
                         channel_info["channel_prev_total"] = prev_ch["total_views"]
                         if channel_info["channel_prev_total"] is not None and channel_info["channel_total"] is not None:
-                            channel_info["channel_gain_since_prev"] = channel_info["channel_total"] - channel_info["channel_prev_total"]
+                            channel_info["channel_gain_since_prev"] = (
+                                channel_info["channel_total"] - channel_info["channel_prev_total"]
+                            )
 
-                    # compute 24h ago total using interpolation/fallback
                     target_24 = latest_ch["ts_utc"] - timedelta(days=1)
                     interp = interpolate_at(ch_rows, target_24, key="total_views")
                     if interp is None:
@@ -692,17 +688,14 @@ def build_video_display(vid: str):
                             if ch_rows[j]["ts_utc"] <= target_24:
                                 ref_idx = j
                                 break
-                        if ref_idx is None:
-                            ch_24 = None
-                        else:
-                            ch_24 = ch_rows[ref_idx]["total_views"]
+                        ch_24 = ch_rows[ref_idx]["total_views"] if ref_idx is not None else None
                     else:
                         ch_24 = int(round(interp))
 
-                    if ch_24 is not None and channel_info["channel_total"] is not None:
+                    if ch_24 is not None:
                         channel_info["channel_gain_24h"] = channel_info["channel_total"] - ch_24
 
-        # targets
+        # targets ------------------------
         cur.execute("SELECT id, target_views, target_ts, note FROM targets WHERE video_id=%s ORDER BY target_ts ASC", (vid,))
         target_rows = cur.fetchall()
         nowu = now_utc()
@@ -711,6 +704,7 @@ def build_video_display(vid: str):
             tid, t_views, t_ts, note = t["id"], t["target_views"], t["target_ts"], t["note"]
             remaining_views = (t_views - (latest_views or 0))
             remaining_seconds = (t_ts - nowu).total_seconds()
+
             if remaining_views <= 0:
                 status = "reached"
                 req_hr = req_5m = 0
@@ -723,6 +717,7 @@ def build_video_display(vid: str):
                 hrs = max(remaining_seconds / 3600.0, 1 / 3600)
                 req_hr = math.ceil(remaining_views / hrs)
                 req_5m = math.ceil(req_hr / 12)
+
             targets_display.append({
                 "id": tid,
                 "target_views": t_views,
@@ -747,6 +742,7 @@ def build_video_display(vid: str):
         "latest_ts_ist": latest_ts_ist,
         "channel_info": channel_info
     }
+
 
 # -----------------------------
 # Auth routes
