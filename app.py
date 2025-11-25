@@ -532,6 +532,9 @@ def start_background():
 # -----------------------------
 # Helper: build display data for one video
 # -----------------------------
+# -----------------------------
+# Helper: build display data for one video
+# -----------------------------
 def build_video_display(vid: str):
     conn = db()
     with conn.cursor() as cur:
@@ -544,71 +547,81 @@ def build_video_display(vid: str):
         cur.execute("SELECT ts_utc, views FROM views WHERE video_id=%s ORDER BY ts_utc ASC", (vid,))
         all_rows = cur.fetchall()
 
-        if not all_rows:
-            daily = {}
-        else:
+        # defaults
+        daily = {}
+        latest_views = None
+        latest_ts = None
+        latest_ts_iso = None
+        latest_ts_ist = None
+
+        if all_rows:
+            # processed_all: list of tuples (ts_ist_str, views, gain_5min, hourly_gain, gain_24h)
             processed_all = process_gains(all_rows)
-            grouped = {}
-            date_time_map = {}
+
+            # build maps: grouped by date and date->time->tpl for prev-day lookups
+            grouped: dict = {}
+            date_time_map: dict = {}
             for tpl in processed_all:
-                ts_ist = tpl[0]
+                ts_ist = tpl[0]  # "YYYY-MM-DD HH:MM:SS"
                 date_str, time_part = ts_ist.split(" ")
                 grouped.setdefault(date_str, []).append(tpl)
                 date_time_map.setdefault(date_str, {})[time_part] = tpl
+
+            # iterate dates newest-first for display
             dates_sorted = sorted(grouped.keys(), reverse=True)
             daily = {}
             for date_str in dates_sorted:
-                processed = grouped[date_str]
-                prev_date_str = (datetime.fromisoformat(date_str).date() - timedelta(days=1)).isoformat()
+                processed = grouped[date_str]  # chronological within this day (as produced by process_gains)
+                prev_date_obj = (datetime.fromisoformat(date_str).date() - timedelta(days=1))
+                prev_date_str = prev_date_obj.isoformat()
                 prev_map = date_time_map.get(prev_date_str, {})
+
                 display_rows = []
                 for tpl in processed:
-    ts_ist, views, gain_5min, hourly_gain, gain_24h = tpl
-    time_part = ts_ist.split(" ")[1]
+                    ts_ist, views, gain_5min, hourly_gain, gain_24h = tpl
+                    time_part = ts_ist.split(" ")[1]
 
-    # find previous-day tuple allowing small time drift (tolerance) for pct24 matching
-    prev_tpl_for_pct = prev_map.get(time_part)
-    if prev_tpl_for_pct is None:
-        prev_tpl_for_pct = find_closest_tpl(prev_map, time_part, tolerance_seconds=10)
+                    # find previous-day tuple allowing small time drift (tolerance) for pct24 matching
+                    prev_tpl_for_pct = prev_map.get(time_part)
+                    if prev_tpl_for_pct is None:
+                        prev_tpl_for_pct = find_closest_tpl(prev_map, time_part, tolerance_seconds=10)
 
-    prev_gain24_for_pct = prev_tpl_for_pct[4] if prev_tpl_for_pct else None
+                    prev_gain24_for_pct = prev_tpl_for_pct[4] if prev_tpl_for_pct else None
 
-    pct24 = None
-    if prev_gain24_for_pct not in (None, 0):
-        try:
-            pct24 = round(((gain_24h or 0) - prev_gain24_for_pct) / prev_gain24_for_pct * 100, 2)
-        except Exception:
-            pct24 = None
+                    pct24 = None
+                    if prev_gain24_for_pct not in (None, 0):
+                        try:
+                            pct24 = round(((gain_24h or 0) - prev_gain24_for_pct) / prev_gain24_for_pct * 100, 2)
+                        except Exception:
+                            pct24 = None
 
-    # --- new: projected (min) views using yesterday 22:30 (or closest earlier up to 5 min) ---
-    projected = None
-    prev_2230_tpl = find_closest_prev(prev_map, "22:30:00", max_earlier_seconds=300)
-    if prev_2230_tpl is not None and pct24 not in (None,):
-        prev_views_2230 = prev_2230_tpl[1]
-        prev_gain24_2230 = prev_2230_tpl[4]
-        if prev_views_2230 is not None and prev_gain24_2230 not in (None, 0):
-            try:
-                projected_val = prev_views_2230 + prev_gain24_2230 * (1 + (pct24 / 100.0))
-                projected = int(round(projected_val))
-            except Exception:
-                projected = None
+                    # --- projected (using yesterday 22:30 or closest earlier ≤ max_earlier_seconds) ---
+                    projected = None
+                    # prefer exact "22:30:00", otherwise closest earlier within 5 minutes (300s)
+                    prev_2230_tpl = find_closest_prev(prev_map, "22:30:00", max_earlier_seconds=300)
 
-    # append row (keep chronological order)
-    display_rows.append((ts_ist, views, gain_5min, hourly_gain, gain_24h, pct24, projected))
+                    if prev_2230_tpl is not None and pct24 not in (None,):
+                        prev_views_2230 = prev_2230_tpl[1]
+                        prev_gain24_2230 = prev_2230_tpl[4]
+                        if prev_views_2230 is not None and prev_gain24_2230 not in (None, 0):
+                            try:
+                                projected_val = prev_views_2230 + prev_gain24_2230 * (1 + (pct24 / 100.0))
+                                projected = int(round(projected_val))
+                            except Exception:
+                                projected = None
 
-daily[date_str] = list(reversed(display_rows))
+                    display_rows.append((ts_ist, views, gain_5min, hourly_gain, gain_24h, pct24, projected))
 
-latest_views = None
-latest_ts = None
-if all_rows:
-    latest_views = all_rows[-1]["views"]
-    latest_ts = all_rows[-1]["ts_utc"]
+                # show newest-first in templates (they expect newest first)
+                daily[date_str] = list(reversed(display_rows))
 
-latest_ts_iso = latest_ts.isoformat() if latest_ts is not None else None
-latest_ts_ist = latest_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if latest_ts is not None else None
+            # latest values
+            latest_views = all_rows[-1]["views"]
+            latest_ts = all_rows[-1]["ts_utc"]
+            latest_ts_iso = latest_ts.isoformat() if latest_ts is not None else None
+            latest_ts_ist = latest_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if latest_ts is not None else None
 
-
-        # channel stats
+        # channel stats: channel_id, total, previous total, gain since prev, gain 24h
         channel_info = {
             "channel_id": None,
             "channel_total": None,
@@ -631,11 +644,13 @@ latest_ts_ist = latest_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if lates
                         channel_info["channel_prev_total"] = prev_ch["total_views"]
                         if channel_info["channel_prev_total"] is not None and channel_info["channel_total"] is not None:
                             channel_info["channel_gain_since_prev"] = channel_info["channel_total"] - channel_info["channel_prev_total"]
+
+                    # compute 24h ago total using interpolation/fallback
                     target_24 = latest_ch["ts_utc"] - timedelta(days=1)
                     interp = interpolate_at(ch_rows, target_24, key="total_views")
                     if interp is None:
                         ref_idx = None
-                        for j in range(len(ch_rows)-1, -1, -1):
+                        for j in range(len(ch_rows) - 1, -1, -1):
                             if ch_rows[j]["ts_utc"] <= target_24:
                                 ref_idx = j
                                 break
@@ -645,6 +660,7 @@ latest_ts_ist = latest_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if lates
                             ch_24 = ch_rows[ref_idx]["total_views"]
                     else:
                         ch_24 = int(round(interp))
+
                     if ch_24 is not None and channel_info["channel_total"] is not None:
                         channel_info["channel_gain_24h"] = channel_info["channel_total"] - ch_24
 
@@ -666,7 +682,7 @@ latest_ts_ist = latest_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if lates
                 req_5m = math.ceil(req_hr / 12)
             else:
                 status = "active"
-                hrs = max(remaining_seconds / 3600.0, 1/3600)
+                hrs = max(remaining_seconds / 3600.0, 1 / 3600)
                 req_hr = math.ceil(remaining_views / hrs)
                 req_5m = math.ceil(req_hr / 12)
             targets_display.append({
