@@ -16,9 +16,8 @@
     }
     body{ background:#fff; color:var(--text-dark); }
     .card{ background:#fff; border:1px solid var(--border); }
-    .badge.paused{ background:#adb5bd; }
-    .gain-pos{ background:var(--accent-green); padding:.1rem .4rem; border-radius:.25rem; display:inline-block;}
-    .gain-neg{ background:var(--accent-red); padding:.1rem .4rem; border-radius:.25rem; display:inline-block;}
+    .gain-pos{ background:var(--accent-green); padding:.12rem .45rem; border-radius:.25rem; display:inline-block;}
+    .gain-neg{ background:var(--accent-red); padding:.12rem .45rem; border-radius:.25rem; display:inline-block;}
     .gain-null{ color:var(--muted); }
     .muted{ color:var(--muted); }
     .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", "Courier New", monospace; }
@@ -26,7 +25,7 @@
     .small-note { font-size:.86rem; color:var(--muted); }
 
     /* Thumbnail & header */
-    .video-hero { max-width:900px; margin:0 auto; }
+    .video-hero { max-width:920px; margin:0 auto; }
     .video-thumb {
       width:100%;
       height:240px;
@@ -46,7 +45,7 @@
       display:inline-flex;
       gap:.5rem;
       align-items:center;
-      padding:.3rem .55rem;
+      padding:.35rem .6rem;
       border-radius:.45rem;
       background:#f7f9fb;
       border:1px solid var(--border);
@@ -55,30 +54,16 @@
       white-space:nowrap;
     }
     .live-badge .dot {
-      width:8px; height:8px; border-radius:50%; background:#28a745; box-shadow:0 0 6px rgba(40,167,69,.25);
+      width:8px; height:8px; border-radius:50%; background:#28a745;
     }
-    .live-sub { display:block; font-size:.85rem; color:var(--muted); margin-top:.18rem; }
+    .live-sub { display:block; font-size:.85rem; color:var(--muted); margin-top:.12rem; }
 
-    /* Channel badge */
-    .channel-badge {
-      display:flex;
-      gap:.6rem;
-      align-items:center;
-      margin-top:.6rem;
-      padding:.35rem .6rem;
-      border-radius:.45rem;
-      background:#fff;
-      border:1px solid var(--border);
-      font-size:.95rem;
-      white-space:nowrap;
-    }
-    .channel-badge .val { font-weight:600; font-family: ui-monospace, monospace; }
+    /* Channel / actions */
+    .action-row { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; margin-top:.8rem; }
+    .action-row .btn { min-width:110px; flex:0 0 auto; }
+    .action-row form { margin:0; display:flex; gap:.45rem; align-items:center; }
 
-    /* Action buttons layout */
-    .action-row { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; }
-    .action-row .btn { min-width:120px; flex:0 0 auto; }
-
-    /* Targets, table container */
+    /* Content */
     .content-wrap { max-width:1100px; margin:1rem auto; padding:0 0.5rem; }
     .card-compact { border-radius:.5rem; border:1px solid var(--border); padding:.75rem; background:#fff; }
 
@@ -95,12 +80,14 @@
     .day-block { display:none; }
     .day-block.active { display:block; }
 
+    /* Comparison box */
+    .compare-box { background:#f8f9fa; border:1px solid var(--border); padding:.6rem; border-radius:.5rem; }
   </style>
 </head>
 <body>
 <div class="container py-3">
 
-  <!-- Top nav: back + user info / logout / add-user -->
+  <!-- Top nav -->
   <div class="d-flex justify-content-between align-items-center mb-2">
     <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('home') }}">← Back</a>
     <div class="d-flex align-items-center gap-2">
@@ -120,12 +107,12 @@
       <img class="video-thumb" src="{{ v.thumbnail }}" alt="thumbnail for {{ v.name }}">
     </a>
 
-    <!-- Title -->
+    <!-- Title + ID -->
     <div class="mt-2">
       <div class="video-title">{{ v.name }}</div>
       <div class="small-note">Video ID: <span class="mono">{{ v.video_id }}</span></div>
 
-      <!-- LIVE / Updated badge (video samples) -->
+      <!-- LIVE / Updated badge -->
       <div id="liveBadgeWrap" class="mt-2">
         {% if v.latest_ts_iso and v.latest_views is not none %}
           <div class="live-badge" id="liveBadge" data-latest-iso="{{ v.latest_ts_iso }}" data-views="{{ v.latest_views|int }}">
@@ -137,87 +124,62 @@
           <div class="small-note">No samples yet.</div>
         {% endif %}
       </div>
-
-      <!-- CHANNEL badge: shows latest channel total, gain since prev snapshot, gain 24h -->
-      <div class="channel-badge" aria-hidden="false" title="Channel total & gains">
-        {% set c = v.channel_info %}
-        {% if c.channel_total is not none %}
-          <div>Channel:</div>
-          <div class="val">{{ "{:,}".format(c.channel_total) }}</div>
-          <div class="muted">·</div>
-          <div>
-            {% if c.channel_gain_since_prev is none %}
-              <span class="muted">since last: —</span>
-            {% else %}
-              {% if c.channel_gain_since_prev >= 0 %}
-                <span class="gain-pos">+{{ "{:,}".format(c.channel_gain_since_prev) }} since last</span>
-              {% else %}
-                <span class="gain-neg">{{ "{:,}".format(c.channel_gain_since_prev) }} since last</span>
-              {% endif %}
-            {% endif %}
-          </div>
-          <div class="muted">·</div>
-          <div>
-            {% if c.channel_gain_24h is none %}
-              <span class="muted">24h: —</span>
-            {% else %}
-              {% if c.channel_gain_24h >= 0 %}
-                <span class="gain-pos">+{{ "{:,}".format(c.channel_gain_24h) }} (24h)</span>
-              {% else %}
-                <span class="gain-neg">{{ "{:,}".format(c.channel_gain_24h) }} (24h)</span>
-              {% endif %}
-            {% endif %}
-          </div>
-        {% else %}
-          <div class="muted">Channel stats not available</div>
-        {% endif %}
-      </div>
     </div>
 
-    <!-- Actions -->
+    <!-- Actions (Export doesn't need admin password) -->
     <div class="mt-3 action-row">
-      <!-- Export: simple GET -->
-      <a class="btn btn-outline-secondary btn-sm"
-         href="{{ url_for('export_video', video_id=v.video_id) }}">
-        Export
-      </a>
+      <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('export_video', video_id=v.video_id) }}">Export</a>
 
-      <!-- Pause / Resume: POST + admin password -->
-      <form method="POST"
-            action="{{ url_for('stop_tracking', video_id=v.video_id) }}"
-            class="d-flex gap-2 align-items-center">
-        <input class="form-control form-control-sm"
-               type="password"
-               name="admin_secret"
-               placeholder="Admin pwd"
-               required
-               style="max-width:130px;">
+      <!-- Pause/Resume requires admin password (unless admin session unlocked) -->
+      <form method="POST" action="{{ url_for('stop_tracking', video_id=v.video_id) }}">
+        <input class="form-control form-control-sm" type="password" name="admin_secret" placeholder="Admin pwd" required style="max-width:130px;">
         <button class="btn btn-outline-warning btn-sm" type="submit">
           {% if v.is_tracking %}Pause{% else %}Resume{% endif %}
         </button>
       </form>
 
-      <!-- Remove video: POST + admin password -->
-      <form method="POST"
-            action="{{ url_for('remove_video', video_id=v.video_id) }}"
-            class="d-flex gap-2 align-items-center"
-            onsubmit="return confirm('Delete this video and ALL its data?');">
-        <input class="form-control form-control-sm"
-               type="password"
-               name="admin_secret"
-               placeholder="Admin pwd"
-               required
-               style="max-width:130px;">
-        <button class="btn btn-outline-danger btn-sm" type="submit">
-          Remove
-        </button>
+      <!-- Remove (POST) -->
+      <form method="POST" action="{{ url_for('remove_video', video_id=v.video_id) }}" onsubmit="return confirm('Delete this video and ALL its data?')">
+        <input class="form-control form-control-sm" type="password" name="admin_secret" placeholder="Admin pwd" required style="max-width:130px;">
+        <button class="btn btn-outline-danger btn-sm" type="submit">Remove</button>
       </form>
     </div>
   </div>
 
   <div class="content-wrap">
+    <!-- Comparison box -->
+    <div class="compare-box mb-3">
+      <div class="d-flex align-items-center justify-content-between gap-2">
+        <div>
+          <strong>Compare with other video</strong>
+          <div class="small-note">Provide a video link/ID and a comparison date (YYYY-MM-DD). The app will compute offset days automatically.</div>
+        </div>
+        <div class="d-flex gap-2">
+          <!-- Set comparison: posts to set_comparison route (comparison_link + comparison_date) -->
+          <form method="POST" class="d-flex gap-2" action="{{ url_for('set_comparison', video_id=v.video_id) }}">
+            <input name="comparison_link" class="form-control form-control-sm" placeholder="Compare video (link or id)" style="min-width:220px;">
+            <input name="comparison_date" type="date" class="form-control form-control-sm" placeholder="YYYY-MM-DD" style="width:150px;">
+            <button class="btn btn-sm btn-primary" type="submit">Set</button>
+          </form>
+
+          <!-- Reset comparison: post empty values (the set_comparison handler clears when both are empty) -->
+          <form method="POST" action="{{ url_for('set_comparison', video_id=v.video_id) }}">
+            <input type="hidden" name="comparison_link" value="">
+            <input type="hidden" name="comparison_date" value="">
+            <button class="btn btn-sm btn-outline-secondary" type="submit">Reset</button>
+          </form>
+        </div>
+      </div>
+
+      {% if v.compare_meta %}
+        <div class="mt-2 small-note">
+          Comparing to <strong>{{ v.compare_meta.video_id }}</strong> with offset <strong>{{ v.compare_meta.offset_days }}</strong> days.
+        </div>
+      {% endif %}
+    </div>
+
     <!-- Targets -->
-    <div class="mt-4">
+    <div class="mt-1">
       <h6 class="mb-2">🎯 Targets</h6>
       {% if v.targets|length == 0 %}
         <div class="card-compact muted">No targets yet. Add one below.</div>
@@ -294,51 +256,48 @@
                       <th>Time (IST)</th>
                       <th>Total Views</th>
                       <th>Gain (5 min)</th>
-                      <th>Hourly Growth</th>
-                      <th>Hourly Growth % change</th>
                       <th>24h Gain ⓘ</th>
                       <th>Change 24h vs prev day (%)</th>
                       <th>Projected (min) views</th>
+                      <th>Compare diff</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {# rows must be tuples of 8 elements in this order:
-                       ts, views, gain5, hourly, gain24, pct24, projected, hourly_pct
-                       (If your backend returns a different order, adapt accordingly.) #}
-                    {% for ts, views, gain, hourly, gain24, pct24, projected, hourly_pct in rows %}
+                    {# rows must be tuples in this order:
+                       ts, views, gain5, gain24, pct24, projected, comp_diff #}
+                    {% for ts, views, gain5, gain24, pct24, projected, comp_diff in rows %}
                       <tr>
                         <td class="mono">{{ ts }}</td>
                         <td class="mono">{{ "{:,}".format(views) }}</td>
+
                         <td>
-                          {% if gain is none %}<span class="gain-null">—</span>
-                          {% elif gain >= 0 %}<span class="gain-pos">+{{ "{:,}".format(gain) }}</span>
-                          {% else %}<span class="gain-neg">{{ "{:,}".format(gain) }}</span>{% endif %}
+                          {% if gain5 is none %}<span class="gain-null">—</span>
+                          {% elif gain5 >= 0 %}<span class="gain-pos">+{{ "{:,}".format(gain5) }}</span>
+                          {% else %}<span class="gain-neg">{{ "{:,}".format(gain5) }}</span>{% endif %}
                         </td>
-                        <td>
-                          {% if hourly is none %}<span class="gain-null">—</span>
-                          {% elif hourly >= 0 %}<span class="gain-pos">+{{ "{:,}".format(hourly) }}</span>
-                          {% else %}<span class="gain-neg">{{ "{:,}".format(hourly) }}</span>{% endif %}
-                        </td>
-                        <td>
-                          {% if hourly_pct is none %}<span class="gain-null">—</span>
-                          {% elif hourly_pct > 0 %}<span class="gain-pos">+{{ ('{:.2f}'.format(hourly_pct)) }}%</span>
-                          {% elif hourly_pct < 0 %}<span class="gain-neg">{{ ('{:.2f}'.format(hourly_pct)) }}%</span>
-                          {% else %}<span>0.00%</span>{% endif %}
-                        </td>
+
                         <td>
                           {% if gain24 is none %}<span class="gain-null">—</span>
                           {% elif gain24 >= 0 %}<span class="gain-pos">+{{ "{:,}".format(gain24) }}</span>
                           {% else %}<span class="gain-neg">{{ "{:,}".format(gain24) }}</span>{% endif %}
                         </td>
+
                         <td>
                           {% if pct24 is none %}<span class="gain-null">—</span>
                           {% elif pct24 > 0 %}<span class="gain-pos">+{{ ('{:.2f}'.format(pct24)) }}%</span>
                           {% elif pct24 < 0 %}<span class="gain-neg">{{ ('{:.2f}'.format(pct24)) }}%</span>
                           {% else %}<span>0.00%</span>{% endif %}
                         </td>
+
                         <td>
                           {% if projected is none %}<span class="gain-null">—</span>
                           {% else %}<span class="mono">{{ "{:,}".format(projected) }}</span>{% endif %}
+                        </td>
+
+                        <td>
+                          {% if comp_diff is none %}<span class="gain-null">—</span>
+                          {% elif comp_diff >= 0 %}<span class="gain-pos">+{{ "{:,}".format(comp_diff) }}</span>
+                          {% else %}<span class="gain-neg">{{ "{:,}".format(comp_diff) }}</span>{% endif %}
                         </td>
                       </tr>
                     {% endfor %}
@@ -358,69 +317,76 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
   (function(){
+    /* Date selector + prev/next + keyboard arrows */
     const dateSelect = document.getElementById('dateSelect');
     const prevBtn = document.getElementById('prevDayBtn');
     const nextBtn = document.getElementById('nextDayBtn');
     const showingDate = document.getElementById('showingDate');
     const dayBlocks = Array.from(document.querySelectorAll('.day-block'));
-    const dates = Array.from(dateSelect.options).map(opt => opt.value);
+    const dates = Array.from(dateSelect ? dateSelect.options : []).map(opt => opt.value);
 
     function showDate(date) {
       dayBlocks.forEach(b => b.classList.remove('active'));
       const block = document.querySelector('.day-block[data-date="'+date+'"]');
       if (block) block.classList.add('active');
-      dateSelect.value = date;
-      showingDate.textContent = date;
+      if (dateSelect) dateSelect.value = date;
+      if (showingDate) showingDate.textContent = date || '';
       const idx = dates.indexOf(date);
-      prevBtn.disabled = (idx === dates.length - 1) || idx === -1;
-      nextBtn.disabled = (idx <= 0);
+      if (prevBtn) prevBtn.disabled = (idx === dates.length - 1) || idx === -1;
+      if (nextBtn) nextBtn.disabled = (idx <= 0);
     }
-    const initial = dateSelect.options.length ? dateSelect.options[0].value : null;
-    if (initial) showDate(initial);
-    dateSelect.addEventListener('change', (e) => showDate(e.target.value));
-    prevBtn.addEventListener('click', () => {
+
+    if (dateSelect && dateSelect.options.length) {
+      showDate(dateSelect.options[0].value);
+    }
+
+    if (dateSelect) dateSelect.addEventListener('change', (e) => showDate(e.target.value));
+    if (prevBtn) prevBtn.addEventListener('click', () => {
       const idx = dates.indexOf(dateSelect.value);
       if (idx === -1) return;
       const nextIdx = Math.min(dates.length - 1, idx + 1);
       showDate(dates[nextIdx]);
     });
-    nextBtn.addEventListener('click', () => {
+    if (nextBtn) nextBtn.addEventListener('click', () => {
       const idx = dates.indexOf(dateSelect.value);
       if (idx === -1) return;
       const nextIdx = Math.max(0, idx - 1);
       showDate(dates[nextIdx]);
     });
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'ArrowLeft') prevBtn.click();
-      if (e.key === 'ArrowRight') nextBtn.click();
+      if (e.key === 'ArrowLeft') prevBtn && prevBtn.click();
+      if (e.key === 'ArrowRight') nextBtn && nextBtn.click();
     });
-    dateSelect.addEventListener('focus', () => dateSelect.size = Math.min(8, dates.length));
-    dateSelect.addEventListener('blur', () => dateSelect.size = 1);
-  })();
+    if (dateSelect) {
+      dateSelect.addEventListener('focus', () => dateSelect.size = Math.min(8, dates.length));
+      dateSelect.addEventListener('blur', () => dateSelect.size = 1);
+    }
 
-  // live badge updater: updates "Updated X ago • N views" every 10s
-  (function(){
-    const liveBadge = document.getElementById('liveBadge');
-    const liveText = document.getElementById('liveText');
-    if (!liveBadge || !liveText) return;
-    function timeAgoText(iso) {
-      const then = new Date(iso);
-      const now = new Date();
-      const diff = Math.floor((now - then) / 1000);
-      if (diff < 5) return 'just now';
-      if (diff < 60) return diff + 's ago';
-      if (diff < 3600) return Math.floor(diff/60) + 'm ' + (diff%60) + 's ago';
-      if (diff < 86400) return Math.floor(diff/3600) + 'h ' + Math.floor((diff%3600)/60) + 'm ago';
-      return Math.floor(diff/86400) + 'd ago';
-    }
-    function refresh() {
-      const iso = liveBadge.dataset.latestIso;
-      const views = parseInt(liveBadge.dataset.views || '0', 10);
-      const ago = timeAgoText(iso);
-      liveText.textContent = 'Updated ' + ago + ' • ' + views.toLocaleString() + ' views';
-    }
-    refresh();
-    setInterval(refresh, 10 * 1000);
+    /* Live badge updater: updates "Updated X ago • N views" every 10s */
+    (function(){
+      const liveBadge = document.getElementById('liveBadge');
+      const liveText = document.getElementById('liveText');
+      if (!liveBadge || !liveText) return;
+      function timeAgoText(iso) {
+        const then = new Date(iso);
+        const now = new Date();
+        const diff = Math.floor((now - then) / 1000);
+        if (diff < 5) return 'just now';
+        if (diff < 60) return diff + 's ago';
+        if (diff < 3600) return Math.floor(diff/60) + 'm ' + (diff%60) + 's ago';
+        if (diff < 86400) return Math.floor(diff/3600) + 'h ' + Math.floor((diff%3600)/60) + 'm ago';
+        return Math.floor(diff/86400) + 'd ago';
+      }
+      function refresh() {
+        const iso = liveBadge.dataset.latestIso;
+        const views = parseInt(liveBadge.dataset.views || '0', 10);
+        const ago = timeAgoText(iso);
+        liveText.textContent = 'Updated ' + ago + ' • ' + views.toLocaleString() + ' views';
+      }
+      refresh();
+      setInterval(refresh, 10 * 1000);
+    })();
+
   })();
 </script>
 </body>
