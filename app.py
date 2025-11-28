@@ -718,6 +718,7 @@ def build_video_display(vid: str):
             latest_ts_ist = latest_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S")
 
         # ---- Channel Stats ----
+                # ---- Channel Stats ----
         channel_info = {
             "channel_id": None,
             "channel_total": None,
@@ -746,9 +747,50 @@ def build_video_display(vid: str):
                     target_24 = rows[-1]["ts_utc"] - timedelta(days=1)
                     interp = interpolate_at(rows, target_24, key="total_views")
 
-                    ref_24 = int(interp) if interp else None
-                    if ref_24:
+                    # use explicit None check (interp may be 0)
+                    ref_24 = int(round(interp)) if interp is not None else None
+                    if ref_24 is not None and channel_info["channel_total"] is not None:
                         channel_info["channel_gain_24h"] = channel_info["channel_total"] - ref_24
+
+        # targets ------------------------
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, target_views, target_ts, note FROM targets WHERE video_id=%s ORDER BY target_ts ASC", (vid,))
+            target_rows = cur.fetchall()
+
+        nowu = now_utc()
+        targets_display = []
+        for t in target_rows:
+            tid = t["id"]
+            t_views = t["target_views"]
+            t_ts = t["target_ts"]
+            note = t["note"]
+            remaining_views = t_views - (latest_views or 0)
+            remaining_seconds = (t_ts - nowu).total_seconds()
+
+            if remaining_views <= 0:
+                status = "reached"
+                req_hr = req_5m = 0
+            elif remaining_seconds <= 0:
+                status = "overdue"
+                req_hr = math.ceil(remaining_views)
+                req_5m = math.ceil(req_hr / 12)
+            else:
+                status = "active"
+                hrs = max(remaining_seconds / 3600.0, 1 / 3600)
+                req_hr = math.ceil(remaining_views / hrs)
+                req_5m = math.ceil(req_hr / 12)
+
+            targets_display.append({
+                "id": tid,
+                "target_views": t_views,
+                "target_ts_ist": t_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S"),
+                "note": note,
+                "status": status,
+                "required_per_hour": req_hr,
+                "required_per_5min": req_5m,
+                "remaining_views": remaining_views,
+                "remaining_seconds": int(remaining_seconds)
+            })
 
         compare_meta = None
         if compare_video_id and compare_offset_days is not None:
@@ -762,7 +804,7 @@ def build_video_display(vid: str):
         "name": vrow["name"],
         "is_tracking": bool(vrow["is_tracking"]),
         "daily": daily,
-        "targets": target_rows if 'target_rows' in locals() else [],
+        "targets": targets_display,
         "latest_views": latest_views,
         "latest_ts": latest_ts,
         "latest_ts_iso": latest_ts_iso,
@@ -1277,11 +1319,13 @@ def export_video(video_id):
     if info is None:
         flash("Video not found.", "warning")
         return redirect(url_for("home"))
+
     rows_for_df = []
     dates = sorted(info["daily"].keys())
-        for date in dates:
+    for date in dates:
         day_rows = list(reversed(info["daily"][date]))
         for tpl in day_rows:
+            # tpl: ts, views, gain5, gain24, pct24, projected, comp_diff
             ts, views, gain5, gain24, pct24, projected, comp_diff = tpl
             rows_for_df.append({
                 "Time (IST)": ts,
@@ -1294,10 +1338,12 @@ def export_video(video_id):
             })
 
     df_views = pd.DataFrame(rows_for_df)
+
     conn = db()
     with conn.cursor() as cur:
         cur.execute("SELECT id, target_views, target_ts, note FROM targets WHERE video_id=%s ORDER BY target_ts ASC", (video_id,))
         target_rows = cur.fetchall()
+
     nowu = now_utc()
     targets_rows_for_df = []
     for t in target_rows:
@@ -1331,6 +1377,7 @@ def export_video(video_id):
             "Required / 5min": req_5m,
             "Note": note
         })
+
     df_targets = pd.DataFrame(targets_rows_for_df)
     bio = BytesIO()
     with pd.ExcelWriter(bio, engine="openpyxl") as writer:
@@ -1345,6 +1392,7 @@ def export_video(video_id):
         download_name=f"{safe or 'export'}_views.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 
 # Bootstrap
 init_db()
