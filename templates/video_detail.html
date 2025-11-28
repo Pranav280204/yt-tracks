@@ -155,14 +155,12 @@
           <div class="small-note">Provide a video link/ID and a comparison date (YYYY-MM-DD). The app will compute offset days automatically.</div>
         </div>
         <div class="d-flex gap-2">
-          <!-- Set comparison: posts to set_comparison route (comparison_link + comparison_date) -->
           <form method="POST" class="d-flex gap-2" action="{{ url_for('set_comparison', video_id=v.video_id) }}">
             <input name="comparison_link" class="form-control form-control-sm" placeholder="Compare video (link or id)" style="min-width:220px;">
             <input name="comparison_date" type="date" class="form-control form-control-sm" placeholder="YYYY-MM-DD" style="width:150px;">
             <button class="btn btn-sm btn-primary" type="submit">Set</button>
           </form>
 
-          <!-- Reset comparison: post empty values (the set_comparison handler clears when both are empty) -->
           <form method="POST" action="{{ url_for('set_comparison', video_id=v.video_id) }}">
             <input type="hidden" name="comparison_link" value="">
             <input type="hidden" name="comparison_date" value="">
@@ -256,6 +254,7 @@
                       <th>Time (IST)</th>
                       <th>Total Views</th>
                       <th>Gain (5 min)</th>
+                      <th>Hourly Gain</th>
                       <th>24h Gain ⓘ</th>
                       <th>Change 24h vs prev day (%)</th>
                       <th>Projected (min) views</th>
@@ -264,8 +263,8 @@
                   </thead>
                   <tbody>
                     {# rows must be tuples in this order:
-                       ts, views, gain5, gain24, pct24, projected, comp_diff #}
-                    {% for ts, views, gain5, gain24, pct24, projected, comp_diff in rows %}
+                       ts, views, gain5, hourly_gain, gain24, pct24, projected, comp_diff #}
+                    {% for ts, views, gain5, hourly_gain, gain24, pct24, projected, comp_diff in rows %}
                       <tr>
                         <td class="mono">{{ ts }}</td>
                         <td class="mono">{{ "{:,}".format(views) }}</td>
@@ -274,6 +273,12 @@
                           {% if gain5 is none %}<span class="gain-null">—</span>
                           {% elif gain5 >= 0 %}<span class="gain-pos">+{{ "{:,}".format(gain5) }}</span>
                           {% else %}<span class="gain-neg">{{ "{:,}".format(gain5) }}</span>{% endif %}
+                        </td>
+
+                        <td>
+                          {% if hourly_gain is none %}<span class="gain-null">—</span>
+                          {% elif hourly_gain >= 0 %}<span class="gain-pos">+{{ "{:,}".format(hourly_gain) }}</span>
+                          {% else %}<span class="gain-neg">{{ "{:,}".format(hourly_gain) }}</span>{% endif %}
                         </td>
 
                         <td>
