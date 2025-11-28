@@ -607,7 +607,7 @@ def build_video_display(vid: str):
         if not vrow:
             return None
 
-        # Fetch raw view rows
+        # Fetch raw view rows (chronological)
         cur.execute("SELECT ts_utc, views FROM views WHERE video_id=%s ORDER BY ts_utc ASC", (vid,))
         all_rows = cur.fetchall()
 
@@ -619,29 +619,29 @@ def build_video_display(vid: str):
 
         compare_video_id = vrow.get("compare_video_id")
         compare_offset_days = vrow.get("compare_offset_days")
+        if compare_offset_days is not None:
+            try:
+                compare_offset_days = int(compare_offset_days)
+            except Exception:
+                compare_offset_days = None
 
         if all_rows:
             processed_all = process_gains(all_rows)
-
             grouped = {}
             date_time_map = {}
 
+            # group processed rows by IST date and build a time->tpl map per day
             for tpl in processed_all:
-                ts_ist = tpl[0]
+                ts_ist = tpl[0]  # "YYYY-MM-DD HH:MM:SS"
                 date_str, time_part = ts_ist.split(" ")
                 grouped.setdefault(date_str, []).append(tpl)
                 date_time_map.setdefault(date_str, {})[time_part] = tpl
 
-            # -------------- Build Comparison Mapping --------------
+            # Build comparison video's map if requested
             comp_date_map = {}
-
             if compare_video_id and compare_offset_days is not None:
-                cur.execute(
-                    "SELECT ts_utc, views FROM views WHERE video_id=%s ORDER BY ts_utc ASC",
-                    (compare_video_id,)
-                )
+                cur.execute("SELECT ts_utc, views FROM views WHERE video_id=%s ORDER BY ts_utc ASC", (compare_video_id,))
                 comp_rows = cur.fetchall()
-
                 if comp_rows:
                     comp_processed = process_gains(comp_rows)
                     for ctpl in comp_processed:
@@ -649,76 +649,70 @@ def build_video_display(vid: str):
                         c_date, c_time = c_ts.split(" ")
                         comp_date_map.setdefault(c_date, {})[c_time] = ctpl
 
-            # -------------- Transform rows per day --------------
+            # Iterate dates newest-first for UI
             dates_sorted = sorted(grouped.keys(), reverse=True)
-
             for date_str in dates_sorted:
                 processed = grouped[date_str]
-
                 prev_day = (datetime.fromisoformat(date_str).date() - timedelta(days=1)).isoformat()
                 prev_map = date_time_map.get(prev_day, {})
 
                 display_rows = []
-
                 for tpl in processed:
-                    ts_ist, views, gain_5m, hourly_unused, gain_24h, hourly_pct_unused = tpl
+                    # process_gains returns (ts_ist, views, gain5, hourly, gain_24h, hourly_pct_change)
+                    ts_ist, views, gain_5m, hourly_gain, gain_24h, hourly_pct_unused = tpl
                     time_part = ts_ist.split(" ")[1]
 
-                    # --- Change 24hr (%) vs previous day ---
+                    # --- Change 24h (%) vs previous day (tolerant match) ---
                     prev_tpl = prev_map.get(time_part) or find_closest_tpl(prev_map, time_part, tolerance_seconds=10)
                     prev_gain24 = prev_tpl[4] if prev_tpl else None
-
                     pct24 = None
                     if prev_gain24 not in (None, 0):
                         try:
                             pct24 = round(((gain_24h or 0) - prev_gain24) / prev_gain24 * 100, 2)
-                        except:
+                        except Exception:
                             pct24 = None
 
-                    # --- Projected (based on yesterday 22:30 + improvement %) ---
+                    # --- Projected (based on yesterday 22:30 or closest earlier within 5min) ---
                     projected = None
                     ref_2230 = find_closest_prev(prev_map, "22:30:00", max_earlier_seconds=300)
-
                     if ref_2230 and pct24 not in (None,):
                         base_views = ref_2230[1]
                         base_gain = ref_2230[4]
-
                         if base_views is not None and base_gain not in (None, 0):
                             try:
-                                projected = int(base_views + base_gain * (1 + pct24/100))
-                            except:
+                                projected = int(base_views + base_gain * (1 + pct24 / 100.0))
+                            except Exception:
                                 projected = None
 
-                    # --- NEW: Compare with configured video ---
+                    # --- Comparison diff (if configured) ---
                     comp_diff = None
-
                     if compare_video_id and compare_offset_days is not None and comp_date_map:
                         main_date = datetime.fromisoformat(date_str).date()
                         comp_date = (main_date - timedelta(days=compare_offset_days)).isoformat()
-
                         comp_time_map = comp_date_map.get(comp_date, {})
+                        # prefer exact or closest earlier within 5 minutes
                         comp_match = find_closest_prev(comp_time_map, time_part, max_earlier_seconds=300)
-
                         if comp_match:
                             comp_views = comp_match[1]
                             try:
                                 comp_diff = views - comp_views
-                            except:
+                            except Exception:
                                 comp_diff = None
 
-                    display_rows.append(
-                        (ts_ist, views, gain_5m, gain_24h, pct24, projected, comp_diff)
-                    )
+                    # Append canonical tuple:
+                    # (ts_ist, views, gain_5m, hourly_gain, gain_24h, pct24, projected, comp_diff)
+                    display_rows.append((ts_ist, views, gain_5m, hourly_gain, gain_24h, pct24, projected, comp_diff))
 
+                # newest-first for UI
                 daily[date_str] = list(reversed(display_rows))
 
+            # latest values
             latest_views = all_rows[-1]["views"]
             latest_ts = all_rows[-1]["ts_utc"]
-            latest_ts_iso = latest_ts.isoformat()
-            latest_ts_ist = latest_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S")
+            latest_ts_iso = latest_ts.isoformat() if latest_ts is not None else None
+            latest_ts_ist = latest_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if latest_ts is not None else None
 
         # ---- Channel Stats ----
-                # ---- Channel Stats ----
         channel_info = {
             "channel_id": None,
             "channel_total": None,
@@ -731,28 +725,23 @@ def build_video_display(vid: str):
             ch = fetch_channel_id_for_videos([vid]).get(vid)
             if ch:
                 channel_info["channel_id"] = ch
-
-                cur.execute("SELECT ts_utc,total_views FROM channel_stats WHERE channel_id=%s ORDER BY ts_utc ASC", (ch,))
+                cur.execute("SELECT ts_utc, total_views FROM channel_stats WHERE channel_id=%s ORDER BY ts_utc ASC", (ch,))
                 rows = cur.fetchall()
-
                 if rows:
                     channel_info["channel_total"] = rows[-1]["total_views"]
-
                     if len(rows) > 1:
                         channel_info["channel_prev_total"] = rows[-2]["total_views"]
-                        channel_info["channel_gain_since_prev"] = (
-                            channel_info["channel_total"] - channel_info["channel_prev_total"]
-                        )
-
+                        if channel_info["channel_prev_total"] is not None and channel_info["channel_total"] is not None:
+                            channel_info["channel_gain_since_prev"] = (
+                                channel_info["channel_total"] - channel_info["channel_prev_total"]
+                            )
                     target_24 = rows[-1]["ts_utc"] - timedelta(days=1)
                     interp = interpolate_at(rows, target_24, key="total_views")
-
-                    # use explicit None check (interp may be 0)
                     ref_24 = int(round(interp)) if interp is not None else None
                     if ref_24 is not None and channel_info["channel_total"] is not None:
                         channel_info["channel_gain_24h"] = channel_info["channel_total"] - ref_24
 
-        # targets ------------------------
+        # targets
         with conn.cursor() as cur:
             cur.execute("SELECT id, target_views, target_ts, note FROM targets WHERE video_id=%s ORDER BY target_ts ASC", (vid,))
             target_rows = cur.fetchall()
@@ -795,7 +784,7 @@ def build_video_display(vid: str):
         compare_meta = None
         if compare_video_id and compare_offset_days is not None:
             compare_meta = {
-                "video_id": compare_video_id,
+                "compare_video_id": compare_video_id,
                 "offset_days": compare_offset_days
             }
 
@@ -1315,30 +1304,79 @@ def remove_video(video_id):
 @app.get("/export/<video_id>")
 @login_required
 def export_video(video_id):
+    """
+    Export all stored rows for a video into Excel.
+    Columns (in this order):
+      Time (IST), Views, Gain (5 min), Hourly Gain, Gain (24 h),
+      Change 24h vs prev day (%), Projected (min) views, Compare diff
+    """
     info = build_video_display(video_id)
     if info is None:
         flash("Video not found.", "warning")
         return redirect(url_for("home"))
 
     rows_for_df = []
+    # dates sorted ascending so export is chronological (oldest first)
     dates = sorted(info["daily"].keys())
     for date in dates:
+        # info["daily"][date] is newest-first in UI; reverse to earliest-first
         day_rows = list(reversed(info["daily"][date]))
+
         for tpl in day_rows:
-            # tpl: ts, views, gain5, gain24, pct24, projected, comp_diff
-            ts, views, gain5, gain24, pct24, projected, comp_diff = tpl
+            # tpl might have slightly different shapes depending on your pipeline.
+            # Expected canonical order (8 items):
+            # (ts, views, gain5, hourly_gain, gain24, pct24, projected, comp_diff)
+            ts = tpl[0]
+            views = tpl[1] if len(tpl) > 1 else None
+
+            # defaults
+            gain5 = hourly_gain = gain24 = pct24 = projected = comp_diff = None
+
+            rest = list(tpl[2:])  # remaining fields after ts and views
+
+            # Try to map by length of rest
+            if len(rest) >= 6:
+                # rest: gain5, hourly_gain, gain24, pct24, projected, comp_diff, ...
+                gain5, hourly_gain, gain24, pct24, projected, comp_diff = rest[:6]
+            elif len(rest) == 5:
+                # rest: gain5, hourly_gain, gain24, pct24, projected
+                gain5, hourly_gain, gain24, pct24, projected = rest
+            elif len(rest) == 4:
+                # rest: gain5, hourly_gain, gain24, pct24
+                gain5, hourly_gain, gain24, pct24 = rest
+            elif len(rest) == 3:
+                # ambiguous: assume gain5, gain24, pct24 (old shape)
+                gain5, gain24, pct24 = rest
+                hourly_gain = None
+            elif len(rest) == 2:
+                # assume gain5, hourly_gain
+                gain5, hourly_gain = rest
+            elif len(rest) == 1:
+                gain5 = rest[0]
+
+            # normalize percentage column to a string with two decimals (empty if None)
+            pct24_str = ""
+            if pct24 is not None and pct24 != "":
+                try:
+                    pct24_str = f"{float(pct24):.2f}"
+                except Exception:
+                    pct24_str = str(pct24)
+
             rows_for_df.append({
                 "Time (IST)": ts,
-                "Views": views,
+                "Views": views if views is not None else "",
                 "Gain (5 min)": gain5 if gain5 is not None else "",
+                "Hourly Gain": hourly_gain if hourly_gain is not None else "",
                 "Gain (24 h)": gain24 if gain24 is not None else "",
-                "Change 24h vs prev day (%)": pct24 if pct24 is not None else "",
+                "Change 24h vs prev day (%)": pct24_str,
                 "Projected (min) views": projected if projected is not None else "",
-                "Diff vs comparison video": comp_diff if comp_diff is not None else ""
+                "Compare diff": comp_diff if comp_diff is not None else ""
             })
 
+    # Build dataframe
     df_views = pd.DataFrame(rows_for_df)
 
+    # Targets sheet (same as before)
     conn = db()
     with conn.cursor() as cur:
         cur.execute("SELECT id, target_views, target_ts, note FROM targets WHERE video_id=%s ORDER BY target_ts ASC", (video_id,))
@@ -1351,7 +1389,7 @@ def export_video(video_id):
         t_views = t["target_views"]
         t_ts = t["target_ts"]
         note = t["note"]
-        latest_views = info["latest_views"]
+        latest_views = info.get("latest_views")
         remaining_views = t_views - (latest_views or 0)
         remaining_seconds = (t_ts - nowu).total_seconds()
         if remaining_views <= 0:
@@ -1379,17 +1417,31 @@ def export_video(video_id):
         })
 
     df_targets = pd.DataFrame(targets_rows_for_df)
+
+    # Write to Excel
     bio = BytesIO()
     with pd.ExcelWriter(bio, engine="openpyxl") as writer:
-        df_views.to_excel(writer, index=False, sheet_name="Views")
+        # ensure column order in file by creating DataFrame with exact keys in order above
+        cols_order = [
+            "Time (IST)", "Views", "Gain (5 min)", "Hourly Gain",
+            "Gain (24 h)", "Change 24h vs prev day (%)",
+            "Projected (min) views", "Compare diff"
+        ]
+        # if df_views lacks any column (edge case), create them to preserve order
+        for c in cols_order:
+            if c not in df_views.columns:
+                df_views[c] = ""
+        df_views[cols_order].to_excel(writer, index=False, sheet_name="Views")
+
         if not df_targets.empty:
             df_targets.to_excel(writer, index=False, sheet_name="Targets")
+
     bio.seek(0)
-    safe = "".join(c for c in info["name"] if c.isalnum() or c in " _-").rstrip()
+    safe = "".join(c for c in info["name"] if c.isalnum() or c in " _-").rstrip() or "export"
     return send_file(
         bio,
         as_attachment=True,
-        download_name=f"{safe or 'export'}_views.xlsx",
+        download_name=f"{safe}_views.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
