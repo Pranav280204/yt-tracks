@@ -455,62 +455,107 @@ def process_gains(rows_asc: list[dict]):
     Output list of tuples:
       (ts_ist_str, views, gain_5min, hourly_gain, gain_24h, hourly_pct_change)
 
-    hourly_pct_change = percent change of hourly_gain vs previous row's hourly_gain.
+    Notes:
+    - hourly_gain is computed by interpolating the value at (ts - 1 hour) when possible.
+      If interpolation is not possible, we fall back to the latest sample <= target.
+    - 24h gain uses the same interpolation-first approach.
+    - hourly_pct_change compares the computed hourly_gain with the previous row's hourly_gain.
     """
     out = []
     for i, r in enumerate(rows_asc):
         ts_utc = r["ts_utc"]
         ts_ist = ts_utc.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S")
-        views = r["views"]
+        views = int(r["views"])
 
-        # gain in last 5 minutes
-        gain = None if i == 0 else views - rows_asc[i - 1]["views"]
+        # gain in last 5 minutes (diff vs previous sample)
+        gain_5min = None if i == 0 else views - int(rows_asc[i - 1]["views"])
 
-        # hourly: latest row <= ts - 1h
+        # -------------------------
+        # hourly: interpolation at exact ts - 1h preferred
+        # -------------------------
         target_h = ts_utc - timedelta(hours=1)
-        ref_idx_h = None
-        for j in range(i, -1, -1):
-            if rows_asc[j]["ts_utc"] <= target_h:
-                ref_idx_h = j
-                break
-        hourly = None if ref_idx_h is None else (views - rows_asc[ref_idx_h]["views"])
+        hourly = None
 
-        # 24h: try interpolation first, fallback to latest <= target
+        # try interpolation first
+        try:
+            interp_val = interpolate_at(rows_asc, target_h, key="views")
+        except Exception:
+            interp_val = None
+
+        if interp_val is not None:
+            try:
+                hourly = views - int(round(interp_val))
+            except Exception:
+                hourly = None
+        else:
+            # fallback: latest row <= target_h
+            ref_idx_h = None
+            for j in range(i, -1, -1):
+                if rows_asc[j]["ts_utc"] <= target_h:
+                    ref_idx_h = j
+                    break
+            hourly = None if ref_idx_h is None else (views - int(rows_asc[ref_idx_h]["views"]))
+
+        # -------------------------
+        # 24h: interpolation-first (same logic)
+        # -------------------------
         target_d = ts_utc - timedelta(days=1)
-        interp = interpolate_at(rows_asc, target_d)
-        if interp is None:
+        try:
+            interp_day = interpolate_at(rows_asc, target_d, key="views")
+        except Exception:
+            interp_day = None
+
+        if interp_day is not None:
+            try:
+                gain_24h = views - int(round(interp_day))
+            except Exception:
+                gain_24h = None
+        else:
             ref_idx_d = None
             for j in range(i, -1, -1):
                 if rows_asc[j]["ts_utc"] <= target_d:
                     ref_idx_d = j
                     break
-            gain_24h = None if ref_idx_d is None else (views - rows_asc[ref_idx_d]["views"])
-        else:
-            gain_24h = views - int(round(interp))
+            gain_24h = None if ref_idx_d is None else (views - int(rows_asc[ref_idx_d]["views"]))
 
+        # -------------------------
         # hourly percent change vs previous row's hourly (if available)
+        # -------------------------
         hourly_pct_change = None
         if i > 0:
-            # compute previous row's hourly similarly
+            # compute previous row's hourly using same interpolation/fallback rules
             prev_idx = i - 1
             prev_ts_utc = rows_asc[prev_idx]["ts_utc"]
-            prev_views = rows_asc[prev_idx]["views"]
-            # find prev hourly reference (<= prev_ts -1h)
-            prev_target_h = prev_ts_utc - timedelta(hours=1)
-            prev_ref_idx_h = None
-            for j in range(prev_idx, -1, -1):
-                if rows_asc[j]["ts_utc"] <= prev_target_h:
-                    prev_ref_idx_h = j
-                    break
-            prev_hourly = None if prev_ref_idx_h is None else (prev_views - rows_asc[prev_ref_idx_h]["views"])
+            prev_views = int(rows_asc[prev_idx]["views"])
 
+            prev_target_h = prev_ts_utc - timedelta(hours=1)
+            try:
+                prev_interp = interpolate_at(rows_asc, prev_target_h, key="views")
+            except Exception:
+                prev_interp = None
+
+            if prev_interp is not None:
+                try:
+                    prev_hourly = prev_views - int(round(prev_interp))
+                except Exception:
+                    prev_hourly = None
+            else:
+                prev_ref_idx_h = None
+                for j in range(prev_idx, -1, -1):
+                    if rows_asc[j]["ts_utc"] <= prev_target_h:
+                        prev_ref_idx_h = j
+                        break
+                prev_hourly = None if prev_ref_idx_h is None else (prev_views - int(rows_asc[prev_ref_idx_h]["views"]))
+
+            # compute percent change if both present and prev_hourly != 0
             if hourly is not None and prev_hourly not in (None, 0):
                 try:
                     hourly_pct_change = round(((hourly - prev_hourly) / prev_hourly) * 100, 2)
                 except Exception:
                     hourly_pct_change = None
 
-        out.append((ts_ist, views, gain, hourly, gain_24h, hourly_pct_change))
+        out.append((ts_ist, views, gain_5min, hourly, gain_24h, hourly_pct_change))
+
     return out
 
 
