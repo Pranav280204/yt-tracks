@@ -1094,37 +1094,100 @@ def format_count(n: Optional[int]) -> str:
 def fetch_daily_gains(video_id: str, days: int = 90):
     """
     Returns list of dicts ordered newest-first:
-      [{"est_date": "2025-11-28", "daily_gain": 1234567, "end_views": 56048445}, ...]
-    daily_gain computed as MAX(views) - MIN(views) within that EST calendar day.
+      [{"ist_date": "2025-11-28", "daily_gain": 1234567, "end_views": 56048445}, ...]
+
+    Daily gain is computed as value_at(D @ 22:30 IST) - value_at((D-1) @ 22:30 IST).
+    We fetch only the rows needed in UTC and use interpolate_at to get exact values.
     """
     conn = db()
-    out = []
     with conn.cursor() as cur:
-        # aggregate per EST date using Postgres timezone conversion
-        cur.execute("""
-            SELECT
-              ( (ts_utc AT TIME ZONE 'UTC') AT TIME ZONE 'America/New_York' )::date AS est_date,
-              MAX(views) AS max_v,
-              MIN(views) AS min_v
-            FROM views
-            WHERE video_id = %s
-            GROUP BY est_date
-            ORDER BY est_date DESC
-            LIMIT %s
-        """, (video_id, days))
+        cur.execute("SELECT MAX(ts_utc) AS latest_ts FROM views WHERE video_id=%s", (video_id,))
+        r = cur.fetchone()
+
+    if not r or not r["latest_ts"]:
+        return []
+
+    latest_ts = r["latest_ts"]
+    latest_ist_date = latest_ts.astimezone(IST).date()
+
+    # We will produce 'days' ending at latest_ist_date inclusive
+    start_date = latest_ist_date - timedelta(days=days - 1)
+
+    # earliest target we need interpolation for is (start_date - 1) @ 22:30 IST (previous day's 22:30)
+    earliest_target_ist = start_date - timedelta(days=1)
+    earliest_needed_dt_ist = datetime(earliest_target_ist.year, earliest_target_ist.month, earliest_target_ist.day, 22, 30, tzinfo=IST) - timedelta(hours=1)
+    # latest needed: latest_ist_date @ 22:30 + 1 hour (safety margin)
+    latest_needed_dt_ist = datetime(latest_ist_date.year, latest_ist_date.month, latest_ist_date.day, 22, 30, tzinfo=IST) + timedelta(hours=1)
+
+    fetch_start_utc = earliest_needed_dt_ist.astimezone(timezone.utc)
+    fetch_end_utc = latest_needed_dt_ist.astimezone(timezone.utc)
+
+    # Fetch relevant rows (chronological)
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT ts_utc, views FROM views WHERE video_id=%s AND ts_utc >= %s AND ts_utc <= %s ORDER BY ts_utc ASC",
+            (video_id, fetch_start_utc, fetch_end_utc)
+        )
         rows = cur.fetchall()
-    for r in rows:
-        est_date = r["est_date"].isoformat()
-        max_v = r["max_v"]
-        min_v = r["min_v"]
+
+    # Convert to list of dicts for interpolate_at
+    rows_asc = [{"ts_utc": r["ts_utc"], "views": int(r["views"])} for r in rows]
+
+    out = []
+    # iterate dates newest -> oldest
+    for delta in range(0, days):
+        d = latest_ist_date - timedelta(days=delta)
+        # target timestamp at this day's 22:30 IST
+        target_dt_ist = datetime(d.year, d.month, d.day, 22, 30, tzinfo=IST)
+        target_utc = target_dt_ist.astimezone(timezone.utc)
+
+        # previous day's 22:30
+        prev_dt_ist = target_dt_ist - timedelta(days=1)
+        prev_utc = prev_dt_ist.astimezone(timezone.utc)
+
+        # interpolate at both times
+        val_now = interpolate_at(rows_asc, target_utc, key="views")
+        val_prev = interpolate_at(rows_asc, prev_utc, key="views")
+
+        # if interpolation returns None, fallback to latest sample <= target
+        if val_now is None:
+            # fallback: latest sample <= target_utc
+            val_now = None
+            for r in reversed(rows_asc):
+                if r["ts_utc"] <= target_utc:
+                    val_now = float(r["views"])
+                    break
+
+        if val_prev is None:
+            val_prev = None
+            for r in reversed(rows_asc):
+                if r["ts_utc"] <= prev_utc:
+                    val_prev = float(r["views"])
+                    break
+
+        # compute daily gain if both present
         daily_gain = None
-        if max_v is not None and min_v is not None:
+        end_views = None
+        if val_now is not None:
             try:
-                daily_gain = int(max_v - min_v)
+                end_views = int(round(val_now))
+            except Exception:
+                end_views = None
+        if val_now is not None and val_prev is not None:
+            try:
+                daily_gain = int(round(val_now - val_prev))
             except Exception:
                 daily_gain = None
-        out.append({"est_date": est_date, "daily_gain": daily_gain, "end_views": int(max_v) if max_v is not None else None})
+
+        out.append({
+            "ist_date": d.isoformat(),
+            "daily_gain": daily_gain,
+            "end_views": end_views
+        })
+
+    # newest-first (we already built newest-first)
     return out
+
 
 def fetch_hourly_for_ist_date(video_id: str, date_ist):
     """
