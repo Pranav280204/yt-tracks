@@ -109,7 +109,51 @@ def get_channel_total_cached(channel_id: str) -> Optional[int]:
     with _channel_cache_lock:
         _channel_views_cache[channel_id] = (val, now_ts)
     return val
+def get_latest_channel_totals_for(channel_ids: list[str]) -> dict:
+    """
+    Return dict channel_id -> latest total_views (or None).
+    Uses one DB query (DISTINCT ON) which is fast with proper PK/index.
+    """
+    out: dict = {}
+    if not channel_ids:
+        return out
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("""
+          SELECT DISTINCT ON (channel_id) channel_id, total_views
+          FROM channel_stats
+          WHERE channel_id = ANY(%s)
+          ORDER BY channel_id, ts_utc DESC
+        """, (channel_ids,))
+        for r in cur.fetchall():
+            out[r["channel_id"]] = r["total_views"]
+    # ensure keys present
+    for ch in channel_ids:
+        out.setdefault(ch, None)
+    return out
 
+def get_latest_sample_per_video(video_ids: list[str]) -> dict:
+    """
+    Return dict video_id -> row {video_id, ts_utc, views} for the latest ts_utc per video.
+    Uses DISTINCT ON(video_id) ORDER BY video_id, ts_utc DESC.
+    """
+    out: dict = {}
+    if not video_ids:
+        return out
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("""
+          SELECT DISTINCT ON (video_id) video_id, ts_utc, views
+          FROM views
+          WHERE video_id = ANY(%s)
+          ORDER BY video_id, ts_utc DESC
+        """, (video_ids,))
+        for r in cur.fetchall():
+            out[r["video_id"]] = r
+    # ensure all ids exist
+    for vid in video_ids:
+        out.setdefault(vid, None)
+    return out
 # -----------------------------
 # DB connection (psycopg3)
 # -----------------------------
@@ -217,6 +261,17 @@ def init_db():
           PRIMARY KEY (channel_id, ts_utc)
         );
         """)
+        # after creating tables, add:
+cur.execute("""
+CREATE INDEX IF NOT EXISTS idx_views_video_ts ON views (video_id, ts_utc DESC);
+""")
+cur.execute("""
+CREATE INDEX IF NOT EXISTS idx_views_video_date_ist ON views (video_id, date_ist, ts_utc);
+""")
+cur.execute("""
+CREATE INDEX IF NOT EXISTS idx_channel_stats_ch_ts ON channel_stats (channel_id, ts_utc DESC);
+""")
+
 
     log.info("DB schema ready.")
 
@@ -304,22 +359,65 @@ def fetch_title(video_id: str) -> str:
         log.exception("Title fetch error: %s", e)
         return "Unknown"
 
+# Add near the other globals
+_channel_id_cache: Dict[str, Tuple[Optional[str], float]] = {}
+_CHANNEL_ID_CACHE_TTL = 60.0  # seconds
 def fetch_channel_id_for_videos(video_ids: list[str]) -> dict:
-    """Bulk fetch snippet.channelId for up to 50 video_ids."""
+    """
+    Bulk fetch snippet.channelId for up to 50 video_ids.
+    Uses short in-memory cache to avoid repeated API calls during bursts.
+    Returns map: video_id -> channel_id (may be None).
+    """
     out: dict = {}
-    if not YOUTUBE or not video_ids:
+    if not video_ids:
         return out
+
+    # first consult cache for each id
+    now_ts = time.time()
+    to_fetch = []
+    for vid in video_ids:
+        ent = _channel_id_cache.get(vid)
+        if ent:
+            val, fetched_at = ent
+            if now_ts - fetched_at <= _CHANNEL_ID_CACHE_TTL:
+                out[vid] = val
+                continue
+        # not cached or stale
+        to_fetch.append(vid)
+
+    # if no API available or nothing to fetch, return what we have
+    if (not YOUTUBE) or (not to_fetch):
+        # ensure all requested keys exist in out
+        for vid in video_ids:
+            out.setdefault(vid, None)
+        return out
+
+    # fetch in chunks of 50
     try:
-        for i in range(0, len(video_ids), 50):
-            chunk = video_ids[i:i+50]
+        for i in range(0, len(to_fetch), 50):
+            chunk = to_fetch[i:i+50]
             r = YOUTUBE.videos().list(part="snippet", id=",".join(chunk), maxResults=50).execute()
             for it in r.get("items", []):
                 vid = it["id"]
                 ch = it.get("snippet", {}).get("channelId")
                 out[vid] = ch
+                _channel_id_cache[vid] = (ch, now_ts)
+            # mark any missing items as None and cache them
+            for ch_vid in chunk:
+                if ch_vid not in out:
+                    out[ch_vid] = None
+                    _channel_id_cache[ch_vid] = (None, now_ts)
     except Exception as e:
         log.exception("fetch_channel_id_for_videos error: %s", e)
+        # fallback: ensure all requested keys present
+        for vid in video_ids:
+            out.setdefault(vid, None)
+
+    # ensure all original video_ids exist in output
+    for vid in video_ids:
+        out.setdefault(vid, None)
     return out
+
 
 def fetch_stats_batch(video_ids: list[str]) -> dict:
     if not YOUTUBE or not video_ids:
@@ -1116,31 +1214,56 @@ def healthz():
 @app.get("/")
 @login_required
 def home():
+    t0 = time.time()
     conn = db()
     with conn.cursor() as cur:
         cur.execute("SELECT video_id, name, is_tracking FROM video_list ORDER BY name")
         videos = cur.fetchall()
+    t_db_videos = time.time()
 
-    vids = []
     video_ids = [v["video_id"] for v in videos]
+    vids = []
+
+    # 1) fetch channel ids (may use in-memory API cache)
     ch_map = fetch_channel_id_for_videos(video_ids) if YOUTUBE and video_ids else {}
+    t_ch_map = time.time()
+
+    # 2) batch-read latest channel totals from DB (fast)
     unique_chs = sorted({ch for ch in ch_map.values() if ch})
-    for ch in unique_chs:
-        _ = get_channel_total_cached(ch)
+    channel_totals = get_latest_channel_totals_for(unique_chs) if unique_chs else {}
+    t_ch_totals = time.time()
+
+    # 3) batch-read latest view sample per video
+    latest_samples = get_latest_sample_per_video(video_ids) if video_ids else {}
+    t_latest_samples = time.time()
+
     for v in videos:
         vid = v["video_id"]
         thumb = f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
         short_title = v["name"] if len(v["name"]) <= 60 else v["name"][:57] + "..."
         channel_id = ch_map.get(vid)
-        channel_total = get_channel_total_cached(channel_id) if channel_id else None
+        channel_total = channel_totals.get(channel_id) if channel_id else None
+
+        latest = latest_samples.get(vid)
+        latest_views = latest["views"] if latest else None
+        latest_ts = latest["ts_utc"] if latest else None
+
         vids.append({
             "video_id": vid,
             "name": v["name"],
             "short_title": short_title,
             "thumbnail": thumb,
             "is_tracking": bool(v["is_tracking"]),
-            "channel_total_cached": channel_total
+            "channel_total_cached": channel_total,
+            "latest_views": latest_views,
+            "latest_ts": latest_ts
         })
+
+    t_end = time.time()
+    # Optional timing logs to help you measure improvements
+    log.info("home timings: db_videos=%.3fs ch_map=%.3fs ch_totals=%.3fs latest_samples=%.3fs total=%.3fs",
+             t_db_videos - t0, t_ch_map - t_db_videos, t_ch_totals - t_ch_map, t_latest_samples - t_ch_totals, t_end - t0)
+
     return render_template("home.html", videos=vids)
 
 @app.get("/video/<video_id>")
