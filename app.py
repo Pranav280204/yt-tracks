@@ -1071,6 +1071,174 @@ def login():
 
 
 
+# -----------------------------
+# Stats helpers & routes
+# -----------------------------
+from zoneinfo import ZoneInfo as _ZoneInfo
+EST = _ZoneInfo("America/New_York")
+
+def format_millions(n: Optional[int]) -> str:
+    if n is None:
+        return "—"
+    return f"{n/1_000_000:.2f}M"
+
+def format_count(n: Optional[int]) -> str:
+    if n is None:
+        return "—"
+    # if >=1000 show K for compactness, but keep comma if <100k
+    if abs(n) >= 1000:
+        # round to nearest thousand for UI compactness (e.g. 150000 -> 150k)
+        return f"{int(round(n/1000.0)):,}k"
+    return f"{n:,}"
+
+def fetch_daily_gains(video_id: str, days: int = 90):
+    """
+    Returns list of dicts ordered newest-first:
+      [{"est_date": "2025-11-28", "daily_gain": 1234567, "end_views": 56048445}, ...]
+    daily_gain computed as MAX(views) - MIN(views) within that EST calendar day.
+    """
+    conn = db()
+    out = []
+    with conn.cursor() as cur:
+        # aggregate per EST date using Postgres timezone conversion
+        cur.execute("""
+            SELECT
+              ( (ts_utc AT TIME ZONE 'UTC') AT TIME ZONE 'America/New_York' )::date AS est_date,
+              MAX(views) AS max_v,
+              MIN(views) AS min_v
+            FROM views
+            WHERE video_id = %s
+            GROUP BY est_date
+            ORDER BY est_date DESC
+            LIMIT %s
+        """, (video_id, days))
+        rows = cur.fetchall()
+    for r in rows:
+        est_date = r["est_date"].isoformat()
+        max_v = r["max_v"]
+        min_v = r["min_v"]
+        daily_gain = None
+        if max_v is not None and min_v is not None:
+            try:
+                daily_gain = int(max_v - min_v)
+            except Exception:
+                daily_gain = None
+        out.append({"est_date": est_date, "daily_gain": daily_gain, "end_views": int(max_v) if max_v is not None else None})
+    return out
+
+def fetch_hourly_for_ist_date(video_id: str, date_ist):
+    """
+    date_ist: datetime.date in IST timezone to analyze.
+    Returns list of 24 dicts for hours 0..23:
+      [{"hour": 0, "label": "00:00-01:00", "end_views": 12345, "hour_gain": 2345}, ...]
+    Uses interpolation at end of each hour (IST) when needed.
+    """
+    # build day start/end in IST then convert to UTC for DB fetch
+    start_ist = datetime(date_ist.year, date_ist.month, date_ist.day, 0, 0, 0, tzinfo=IST)
+    end_ist = start_ist + timedelta(days=1)
+    start_utc = start_ist.astimezone(timezone.utc)
+    end_utc = end_ist.astimezone(timezone.utc)
+
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT ts_utc, views FROM views WHERE video_id=%s AND ts_utc >= %s AND ts_utc < %s ORDER BY ts_utc ASC",
+            (video_id, start_utc, end_utc)
+        )
+        rows = cur.fetchall()
+
+    # convert rows into list for interpolate_at
+    rows_asc = [{"ts_utc": r["ts_utc"], "views": int(r["views"])} for r in rows]
+
+    results = []
+    prev_end_views = None
+    for h in range(24):
+        end_hour_ist = start_ist + timedelta(hours=h+1)
+        end_hour_utc = end_hour_ist.astimezone(timezone.utc)
+
+        # try interpolation first
+        interp = interpolate_at(rows_asc, end_hour_utc, key="views")
+        if interp is not None:
+            try:
+                end_views = int(round(interp))
+            except Exception:
+                end_views = None
+        else:
+            # fallback: latest sample <= end_hour_utc
+            end_views = None
+            for r in reversed(rows_asc):
+                if r["ts_utc"] <= end_hour_utc:
+                    end_views = int(r["views"])
+                    break
+
+        hour_gain = None
+        if end_views is not None and prev_end_views is not None:
+            try:
+                hour_gain = int(end_views - prev_end_views)
+            except Exception:
+                hour_gain = None
+
+        # set prev_end_views for next iteration
+        if end_views is not None:
+            prev_end_views = end_views
+
+        label = f"{(h):02d}:00–{(h+1):02d}:00"
+        results.append({
+            "hour": h,
+            "label": label,
+            "end_views": end_views,
+            "hour_gain": hour_gain
+        })
+
+    return results
+
+# Route: stats page
+@app.get("/video/<video_id>/stats")
+@login_required
+def video_stats(video_id):
+    # pick IST date from query param ?date=YYYY-MM-DD else default latest IST date available
+    sel_date_str = request.args.get("date")
+    # get latest IST date available for this video (from DB)
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("SELECT MAX(ts_utc) AS latest_ts FROM views WHERE video_id=%s", (video_id,))
+        r = cur.fetchone()
+        if not r or not r["latest_ts"]:
+            flash("No data available for this video.", "warning")
+            return redirect(url_for("video_detail", video_id=video_id))
+        latest_ts = r["latest_ts"]
+        latest_ist_date = latest_ts.astimezone(IST).date()
+
+    if sel_date_str:
+        try:
+            sel_date = datetime.fromisoformat(sel_date_str).date()
+        except Exception:
+            sel_date = latest_ist_date
+    else:
+        sel_date = latest_ist_date
+
+    # fetch daily list (EST) and hourly for selected IST date
+    daily = fetch_daily_gains(video_id, days=180)   # keep recent 180 days
+    hourly = fetch_hourly_for_ist_date(video_id, sel_date)
+
+    # build list of dates (IST) available for selector from DB quickly:
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT DISTINCT ((ts_utc AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata')::date AS ist_date
+            FROM views WHERE video_id=%s ORDER BY ist_date DESC
+        """, (video_id,))
+        date_rows = cur.fetchall()
+    ist_dates = [r["ist_date"].isoformat() for r in date_rows]
+
+    # pass to template with helpful formatted labels
+    return render_template(
+        "video_stats.html",
+        video_id=video_id,
+        daily=daily,
+        hourly=hourly,
+        selected_date=sel_date.isoformat(),
+        ist_dates=ist_dates
+    )
 
 @app.get("/logout")
 @login_required
