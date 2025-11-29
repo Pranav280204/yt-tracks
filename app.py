@@ -262,17 +262,6 @@ def init_db():
           PRIMARY KEY (channel_id, ts_utc)
         );
         """)
-        # after creating tables, add:
-cur.execute("""
-CREATE INDEX IF NOT EXISTS idx_views_video_ts ON views (video_id, ts_utc DESC);
-""")
-cur.execute("""
-CREATE INDEX IF NOT EXISTS idx_views_video_date_ist ON views (video_id, date_ist, ts_utc);
-""")
-cur.execute("""
-CREATE INDEX IF NOT EXISTS idx_channel_stats_ch_ts ON channel_stats (channel_id, ts_utc DESC);
-""")
-
 
     log.info("DB schema ready.")
 
