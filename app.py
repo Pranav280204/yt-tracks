@@ -1091,88 +1091,113 @@ def format_count(n: Optional[int]) -> str:
         return f"{int(round(n/1000.0)):,}k"
     return f"{n:,}"
 
-def fetch_daily_gains(video_id: str, days: int = 90):
+def fetch_daily_gains(video_id: str):
     """
     Returns list of dicts ordered newest-first:
       [{"ist_date": "2025-11-28", "daily_gain": 1234567, "end_views": 56048445}, ...]
 
-    Daily gain is computed as value_at(D @ 22:30 IST) - value_at((D-1) @ 22:30 IST).
-    We fetch only the rows needed in UTC and use interpolate_at to get exact values.
+    Daily gain is:
+      value_at(D @ 22:30 IST) - value_at((D-1) @ 22:30 IST)
+
+    It automatically figures out the available IST date range from the data and
+    computes for every date in [first_IST_date, latest_IST_date].
     """
     conn = db()
     with conn.cursor() as cur:
-        cur.execute("SELECT MAX(ts_utc) AS latest_ts FROM views WHERE video_id=%s", (video_id,))
+        cur.execute(
+            "SELECT MIN(ts_utc) AS first_ts, MAX(ts_utc) AS latest_ts "
+            "FROM views WHERE video_id=%s",
+            (video_id,)
+        )
         r = cur.fetchone()
 
     if not r or not r["latest_ts"]:
         return []
 
+    first_ts = r["first_ts"]
     latest_ts = r["latest_ts"]
+
+    # Convert to IST dates
+    first_ist_date = first_ts.astimezone(IST).date()
     latest_ist_date = latest_ts.astimezone(IST).date()
 
-    # We will produce 'days' ending at latest_ist_date inclusive
-    start_date = latest_ist_date - timedelta(days=days - 1)
+    # We need data from (first_ist_date - 1 @22:30) up to (latest_ist_date @22:30),
+    # with a 1-hour buffer on both sides so interpolation has neighbors.
+    earliest_target_ist = first_ist_date - timedelta(days=1)
+    earliest_needed_dt_ist = datetime(
+        earliest_target_ist.year, earliest_target_ist.month, earliest_target_ist.day,
+        22, 30, tzinfo=IST
+    ) - timedelta(hours=1)
 
-    # earliest target we need interpolation for is (start_date - 1) @ 22:30 IST (previous day's 22:30)
-    earliest_target_ist = start_date - timedelta(days=1)
-    earliest_needed_dt_ist = datetime(earliest_target_ist.year, earliest_target_ist.month, earliest_target_ist.day, 22, 30, tzinfo=IST) - timedelta(hours=1)
-    # latest needed: latest_ist_date @ 22:30 + 1 hour (safety margin)
-    latest_needed_dt_ist = datetime(latest_ist_date.year, latest_ist_date.month, latest_ist_date.day, 22, 30, tzinfo=IST) + timedelta(hours=1)
+    latest_needed_dt_ist = datetime(
+        latest_ist_date.year, latest_ist_date.month, latest_ist_date.day,
+        22, 30, tzinfo=IST
+    ) + timedelta(hours=1)
 
     fetch_start_utc = earliest_needed_dt_ist.astimezone(timezone.utc)
     fetch_end_utc = latest_needed_dt_ist.astimezone(timezone.utc)
 
-    # Fetch relevant rows (chronological)
+    # Fetch only relevant rows (chronological)
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT ts_utc, views FROM views WHERE video_id=%s AND ts_utc >= %s AND ts_utc <= %s ORDER BY ts_utc ASC",
+            "SELECT ts_utc, views FROM views "
+            "WHERE video_id=%s AND ts_utc >= %s AND ts_utc <= %s "
+            "ORDER BY ts_utc ASC",
             (video_id, fetch_start_utc, fetch_end_utc)
         )
         rows = cur.fetchall()
 
-    # Convert to list of dicts for interpolate_at
-    rows_asc = [{"ts_utc": r["ts_utc"], "views": int(r["views"])} for r in rows]
+    rows_asc = [{"ts_utc": rr["ts_utc"], "views": int(rr["views"])} for rr in rows]
 
     out = []
-    # iterate dates newest -> oldest
-    for delta in range(0, days):
-        d = latest_ist_date - timedelta(days=delta)
-        # target timestamp at this day's 22:30 IST
+    # iterate IST dates from latest -> earliest
+    d = latest_ist_date
+    while d >= first_ist_date:
+        # current day 22:30 IST
         target_dt_ist = datetime(d.year, d.month, d.day, 22, 30, tzinfo=IST)
         target_utc = target_dt_ist.astimezone(timezone.utc)
 
-        # previous day's 22:30
+        # previous day 22:30 IST
         prev_dt_ist = target_dt_ist - timedelta(days=1)
         prev_utc = prev_dt_ist.astimezone(timezone.utc)
 
-        # interpolate at both times
-        val_now = interpolate_at(rows_asc, target_utc, key="views")
-        val_prev = interpolate_at(rows_asc, prev_utc, key="views")
+        # --- interpolate "now" ---
+        try:
+            val_now = interpolate_at(rows_asc, target_utc, key="views")
+        except Exception:
+            val_now = None
 
-        # if interpolation returns None, fallback to latest sample <= target
         if val_now is None:
             # fallback: latest sample <= target_utc
             val_now = None
-            for r in reversed(rows_asc):
-                if r["ts_utc"] <= target_utc:
-                    val_now = float(r["views"])
+            for rr in reversed(rows_asc):
+                if rr["ts_utc"] <= target_utc:
+                    val_now = float(rr["views"])
                     break
+
+        # --- interpolate "prev" ---
+        try:
+            val_prev = interpolate_at(rows_asc, prev_utc, key="views")
+        except Exception:
+            val_prev = None
 
         if val_prev is None:
+            # fallback: latest sample <= prev_utc
             val_prev = None
-            for r in reversed(rows_asc):
-                if r["ts_utc"] <= prev_utc:
-                    val_prev = float(r["views"])
+            for rr in reversed(rows_asc):
+                if rr["ts_utc"] <= prev_utc:
+                    val_prev = float(rr["views"])
                     break
 
-        # compute daily gain if both present
         daily_gain = None
         end_views = None
+
         if val_now is not None:
             try:
                 end_views = int(round(val_now))
             except Exception:
                 end_views = None
+
         if val_now is not None and val_prev is not None:
             try:
                 daily_gain = int(round(val_now - val_prev))
@@ -1185,8 +1210,11 @@ def fetch_daily_gains(video_id: str, days: int = 90):
             "end_views": end_views
         })
 
-    # newest-first (we already built newest-first)
+        d -= timedelta(days=1)
+
+    # newest-first (we already built it newest-first)
     return out
+
 
 
 def fetch_hourly_for_ist_date(video_id: str, date_ist):
