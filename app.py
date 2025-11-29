@@ -1281,7 +1281,7 @@ def video_stats(video_id):
         sel_date = latest_ist_date
 
     # fetch daily list (EST) and hourly for selected IST date
-    daily = fetch_daily_gains(video_id, days=180)   # keep recent 180 days
+    daily = fetch_daily_gains(video_id)   # keep all days
     hourly = fetch_hourly_for_ist_date(video_id, sel_date)
 
     # build list of dates (IST) available for selector from DB quickly:
