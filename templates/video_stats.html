@@ -27,19 +27,19 @@
   </div>
 
   <div class="row g-3">
-    <div class="col-12 col-lg-6">
-      <h5>Daily (EST)</h5>
+        <div class="col-12 col-lg-6">
+      <h5>Daily (IST, 22:30 cut)</h5>
       <div class="stat-card mb-3">
-        <div class="small muted mb-2">Daily gain (end - start) shown in millions (EST days)</div>
+        <div class="small muted mb-2">Daily gain is value at 22:30 IST each day — i.e. gain = value(D @ 22:30 IST) − value((D-1) @ 22:30 IST). Values shown in millions.</div>
         <div class="table-responsive">
           <table class="table table-sm">
             <thead>
-              <tr><th>Date (EST)</th><th>Daily gain</th><th>End views</th></tr>
+              <tr><th>Date (IST)</th><th>Daily gain</th><th>End views (22:30)</th></tr>
             </thead>
             <tbody>
               {% for d in daily %}
                 <tr>
-                  <td class="mono">{{ d.est_date }}</td>
+                  <td class="mono">{{ d.ist_date }}</td>
                   <td>
                     {% if d.daily_gain is none %}
                       <span class="muted">—</span>
