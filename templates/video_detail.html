@@ -259,11 +259,10 @@
                       <th>Change 24h vs prev day (%)</th>
                       <th>Projected (min) views</th>
                       <th>Compare diff</th>
-                      <th>5min ratio</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {# rows may have variable length. We access by index with fallbacks so old shapes won't break #}
+                    {# rows may have variable length. Access by index with fallbacks so older shapes won't break #}
                     {% for row in rows %}
                       {% set ts = row[0] if row|length > 0 else None %}
                       {% set views = row[1] if row|length > 1 else None %}
@@ -273,7 +272,6 @@
                       {% set pct24 = row[5] if row|length > 5 else None %}
                       {% set projected = row[6] if row|length > 6 else None %}
                       {% set comp_diff = row[7] if row|length > 7 else None %}
-                      {% set five_min_ratio = row[8] if row|length > 8 else None %}
                       <tr>
                         <td class="mono">{{ ts }}</td>
                         <td class="mono">
@@ -314,11 +312,6 @@
                           {% if comp_diff is none %}<span class="gain-null">—</span>
                           {% elif comp_diff >= 0 %}<span class="gain-pos">+{{ "{:,}".format(comp_diff) }}</span>
                           {% else %}<span class="gain-neg">{{ "{:,}".format(comp_diff) }}</span>{% endif %}
-                        </td>
-
-                        <td>
-                          {% if five_min_ratio is none %}<span class="gain-null">—</span>
-                          {% else %}{{ ('{:.2f}'.format(five_min_ratio)) }}x{% endif %}
                         </td>
                       </tr>
                     {% endfor %}
