@@ -50,6 +50,8 @@ IST = ZoneInfo("Asia/Kolkata")
 # -----------------------------
 API_KEY = os.getenv("YOUTUBE_API_KEY", "")
 POSTGRES_URL = os.getenv("DATABASE_URL")
+# Reference video id used for 5-min ratio comparison
+REF_COMPARE_VIDEO_ID = "YxWlaYCA8MU"
 ADMIN_CREATE_SECRET = os.getenv("ADMIN_CREATE_SECRET", "")  # master password for creating users
 def require_admin_secret_from_form(form, redirect_endpoint, **redirect_kwargs):
     """
@@ -755,6 +757,8 @@ def build_video_display(vid: str):
      - uses process_gains (bisect-based)
      - caches results for a short TTL
      - fetches comparison video rows only for the same window
+     - also fetches a fixed reference video (REF_COMPARE_VIDEO_ID) to compute a per-row
+       5-minute ratio against that reference video's 5-min gain.
     """
     nowu = now_utc()
 
@@ -789,7 +793,7 @@ def build_video_display(vid: str):
         # +2 days margin to allow interpolation for 24h lookups
         start_utc = (nowu - timedelta(days=_MAX_DISPLAY_DAYS + 2))
 
-        # Fetch raw view rows in window (chronological)
+        # Fetch raw view rows in window (chronological) for main video
         cur.execute(
             "SELECT ts_utc, views FROM views WHERE video_id=%s AND ts_utc >= %s ORDER BY ts_utc ASC",
             (vid, start_utc)
@@ -805,6 +809,17 @@ def build_video_display(vid: str):
             )
             comp_rows = cur.fetchall()
 
+        # Fetch the fixed reference video rows (for 5-min ratio) within the same window.
+        ref_rows = None
+        try:
+            cur.execute(
+                "SELECT ts_utc, views FROM views WHERE video_id=%s AND ts_utc >= %s ORDER BY ts_utc ASC",
+                (REF_COMPARE_VIDEO_ID, start_utc)
+            )
+            ref_rows = cur.fetchall()
+        except Exception:
+            ref_rows = None
+
     # prepare outputs / defaults
     daily = {}
     latest_views = None
@@ -814,10 +829,10 @@ def build_video_display(vid: str):
     compare_meta = None
 
     if all_rows:
-        # process gains efficiently
+        # process gains efficiently for main video
         processed_all = process_gains(all_rows)
 
-        # group by IST date and build per-day time maps
+        # build processed map for main video
         grouped = {}
         date_time_map = {}
         for tpl in processed_all:
@@ -826,7 +841,7 @@ def build_video_display(vid: str):
             grouped.setdefault(date_str, []).append(tpl)
             date_time_map.setdefault(date_str, {})[time_part] = tpl
 
-        # build comp map if available
+        # process comp video if available
         comp_date_map = {}
         if comp_rows:
             comp_processed = process_gains(comp_rows)
@@ -834,6 +849,15 @@ def build_video_display(vid: str):
                 c_ts = ctpl[0]
                 c_date, c_time = c_ts.split(" ")
                 comp_date_map.setdefault(c_date, {})[c_time] = ctpl
+
+        # process reference video (for 5-min ratio)
+        ref_time_map = {}
+        if ref_rows:
+            ref_processed = process_gains(ref_rows)
+            for rtpl in ref_processed:
+                r_ts = rtpl[0]
+                r_date, r_time = r_ts.split(" ")
+                ref_time_map.setdefault(r_date, {})[r_time] = rtpl
 
         # iterate dates newest-first
         dates_sorted = sorted(grouped.keys(), reverse=True)
@@ -884,7 +908,33 @@ def build_video_display(vid: str):
                         except Exception:
                             comp_diff = None
 
-                display_rows.append((ts_ist, views, gain_5m, hourly_gain, gain_24h, pct24, projected, comp_diff))
+                # --- NEW: 5-min ratio against REF_COMPARE_VIDEO_ID ---
+                five_min_ratio = None
+                if ref_time_map:
+                    # try to compare at the same IST date (date_str) first
+                    ref_map_for_date = ref_time_map.get(date_str, {})
+                    # prefer exact or closest earlier within 5 minutes
+                    ref_match = find_closest_prev(ref_map_for_date, time_part, max_earlier_seconds=300)
+                    # if not found for same IST date, optionally look at neighboring date (rare)
+                    if not ref_match:
+                        # try previous day of ref
+                        prev_ref_map = ref_time_map.get((datetime.fromisoformat(date_str).date() - timedelta(days=1)).isoformat(), {})
+                        ref_match = find_closest_prev(prev_ref_map, time_part, max_earlier_seconds=300)
+                    if ref_match:
+                        try:
+                            ref_gain5 = ref_match[2]  # gain_5m of reference
+                        except Exception:
+                            ref_gain5 = None
+                        # compute ratio only when both are present and ref_gain5 != 0
+                        if gain_5m not in (None,) and ref_gain5 not in (None, 0):
+                            try:
+                                five_min_ratio = round(gain_5m / ref_gain5, 3)
+                            except Exception:
+                                five_min_ratio = None
+
+                # Append canonical tuple:
+                # (ts_ist, views, gain_5m, hourly_gain, gain_24h, pct24, projected, comp_diff, five_min_ratio)
+                display_rows.append((ts_ist, views, gain_5m, hourly_gain, gain_24h, pct24, projected, comp_diff, five_min_ratio))
 
             # newest-first for UI
             daily[date_str] = list(reversed(display_rows))
