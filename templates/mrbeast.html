@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>MRBeast channel snapshots</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body{ padding:18px; background:#fff; color:#111; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace; }
+    .gain-pos{ background:#e9f9f0; padding:.12rem .45rem; border-radius:.25rem; display:inline-block; }
+    .gain-neg{ background:#ffecec; padding:.12rem .45rem; border-radius:.25rem; display:inline-block; }
+    .muted{ color:#6b6b6b; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="d-flex align-items-center justify-content-between mb-3 mt-2">
+      <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('home') }}">← Back</a>
+      <h4 class="mb-0">MRBeast channel snapshots</h4>
+      {% if not enabled %}
+        <div class="text-danger small">MRBeast sampler not enabled (MRBEAST_API_KEY missing)</div>
+      {% else %}
+        <div class="small muted">Channel: <span class="mono">{{ channel_id }}</span></div>
+      {% endif %}
+    </div>
+
+    <div class="card mb-3">
+      <div class="card-body">
+        <p class="small muted mb-1">This page shows half-hour MRBeast channel total views stored in <code>channel_stats</code>. Deltas are compared vs the immediately previous sample.</p>
+
+        <div class="table-responsive">
+          <table class="table table-sm align-middle">
+            <thead>
+              <tr>
+                <th>UTC time</th>
+                <th>IST time</th>
+                <th>Total views</th>
+                <th>Δ since prev</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for s in samples %}
+                <tr>
+                  <td class="mono">{{ s.ts_utc.isoformat() }}</td>
+                  <td class="mono">{{ s.ts_ist }}</td>
+                  <td class="mono">{{ "{:,}".format(s.total) if s.total is not none else "—" }}</td>
+                  <td>
+                    {% if s.delta is none %}<span class="muted">—</span>
+                    {% elif s.delta >= 0 %}<span class="gain-pos">+{{ "{:,}".format(s.delta) }}</span>
+                    {% else %}<span class="gain-neg">{{ "{:,}".format(s.delta) }}</span>{% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <footer class="small muted">Stored in PostgreSQL • UTC timestamps</footer>
+  </div>
+</body>
+</html>
