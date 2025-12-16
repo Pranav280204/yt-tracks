@@ -25,6 +25,10 @@
     <div class="d-flex align-items-center gap-2">
       {% if current_user %}
         <span class="small text-muted d-none d-sm-inline">Logged in as <strong>{{ current_user.username }}</strong></span>
+
+        <!-- NEW: MrBeast channel stats button -->
+        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('mrbeast_stats') }}">MrBeast Channel</a>
+
         <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin_users') }}">Add user</a>
         <a class="btn btn-sm btn-outline-danger" href="{{ url_for('logout') }}">Logout</a>
       {% else %}
@@ -70,7 +74,7 @@
           {% if v.channel_total_cached is not none %}
             <div class="badge-channel">{{ "{:,}".format(v.channel_total_cached) }}</div>
           {% endif %}
-                    <a class="no-decor" href="{{ url_for('video_detail', video_id=v.video_id) }}">
+          <a class="no-decor" href="{{ url_for('video_detail', video_id=v.video_id) }}">
             <img class="thumb-img" src="{{ v.thumbnail }}" alt="thumbnail for {{ v.short_title }}">
             <div style="padding:.6rem;">
               <div class="card-title">{{ v.short_title }}</div>
