@@ -53,6 +53,17 @@ POSTGRES_URL = os.getenv("DATABASE_URL")
 # Reference video id used for 5-min ratio comparison
 REF_COMPARE_VIDEO_ID = "YxWlaYCA8MU"
 ADMIN_CREATE_SECRET = os.getenv("ADMIN_CREATE_SECRET", "")  # master password for creating users
+# MRBeast-specific client (separate API key)
+MRBEAST_API_KEY = os.getenv("MRBEAST_API_KEY", "")
+MRBEAST_CHANNEL_ID = os.getenv("MRBEAST_CHANNEL_ID", "UCX6OQ3DkcsbYNE6H8uQQuVA")
+MR_YT = None
+if MRBEAST_API_KEY:
+    try:
+        MR_YT = build("youtube", "v3", developerKey=MRBEAST_API_KEY, cache_discovery=False)
+        log.info("MRBeast YouTube client ready.")
+    except Exception as e:
+        log.exception("MRBeast YT init failed: %s", e)
+
 def require_admin_secret_from_form(form, redirect_endpoint, **redirect_kwargs):
     """
     Check admin_secret in form against ADMIN_CREATE_SECRET.
@@ -684,6 +695,19 @@ def sleep_until_next_5min_IST():
     else:
         next_tick = now_ist.replace(minute=next_min, second=0)
     time.sleep(max(1, (next_tick - now_ist).total_seconds()))
+def sleep_until_next_half_hour_utc():
+    """
+    Sleep until the next :00 or :30 boundary in UTC (aligned).
+    """
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    if now.minute < 30:
+        next_tick = now.replace(minute=30, second=0)
+    else:
+        # next hour at :00
+        next_tick = (now.replace(minute=0, second=0) + timedelta(hours=1))
+    secs = (next_tick - now).total_seconds()
+    if secs > 0:
+        time.sleep(secs)
 
 def sampler_loop():
     """
@@ -734,6 +758,47 @@ def sampler_loop():
         except Exception as e:
             log.exception("Sampler error: %s", e)
             time.sleep(5)
+def mrbeast_sampler_loop():
+    """
+    Runs every half-hour (UTC aligned). Fetches MrBeast channel total views using MR_YT
+    and writes to channel_stats table (same table used for other snapshots).
+    """
+    if not MR_YT or not MRBEAST_CHANNEL_ID:
+        log.info("MRBeast sampler not started — MR_YT or channel id missing.")
+        return
+
+    log.info("MRBeast sampler loop started (aligned to UTC half-hour).")
+    while True:
+        try:
+            sleep_until_next_half_hour_utc()
+            tsu = now_utc()
+            try:
+                resp = MR_YT.channels().list(part="statistics", id=MRBEAST_CHANNEL_ID, maxResults=1).execute()
+                items = resp.get("items", [])
+                if not items:
+                    log.warning("MRBeast channels list returned no items.")
+                    total = None
+                else:
+                    total = int(items[0].get("statistics", {}).get("viewCount", 0) or 0)
+            except Exception as e:
+                log.exception("MRBeast fetch error: %s", e)
+                total = None
+
+            # store in DB channel_stats
+            try:
+                conn = db()
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "INSERT INTO channel_stats (channel_id, ts_utc, total_views) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                        (MRBEAST_CHANNEL_ID, tsu, total)
+                    )
+                log.info("MRBeast snapshot at %s -> %s", tsu.isoformat(), str(total))
+            except Exception as e:
+                log.exception("Failed to insert MRBeast snapshot: %s", e)
+
+        except Exception as e:
+            log.exception("MRBeast sampler loop error: %s", e)
+            time.sleep(10)
 
 def start_background():
     global _sampler_started
@@ -741,8 +806,14 @@ def start_background():
         if not _sampler_started:
             t = threading.Thread(target=sampler_loop, daemon=True, name="yt-sampler")
             t.start()
-            _sampler_started = True
             log.info("Background sampler started.")
+            # start MRBeast sampler if configured
+            if MR_YT and MRBEAST_CHANNEL_ID:
+                t2 = threading.Thread(target=mrbeast_sampler_loop, daemon=True, name="mrbeast-sampler")
+                t2.start()
+                log.info("MRBeast sampler thread started.")
+            _sampler_started = True
+
 
 # -----------------------------
 # Helper: build display data for one video
@@ -1600,6 +1671,44 @@ def home():
              t_db_videos - t0, t_ch_map - t_db_videos, t_ch_totals - t_ch_map, t_latest_samples - t_ch_totals, t_end - t0)
 
     return render_template("home.html", videos=vids)
+    
+@app.get("/mrbeast")
+@login_required
+def mrbeast_overview():
+    """
+    Simple page that shows recent MRBeast channel total views (half-hour samples)
+    and the delta since previous sample.
+    """
+    if not MRBEAST_CHANNEL_ID:
+        flash("MRBeast channel id not configured.", "warning")
+        return redirect(url_for("home"))
+
+    conn = db()
+    with conn.cursor() as cur:
+        # fetch last 240 samples (~30 days if every 30m) but keep it bounded
+        cur.execute(
+            "SELECT ts_utc, total_views FROM channel_stats WHERE channel_id=%s ORDER BY ts_utc DESC LIMIT 240",
+            (MRBEAST_CHANNEL_ID,)
+        )
+        rows = cur.fetchall()
+
+    # build list newest-first with delta
+    out = []
+    prev = None
+    for r in rows:
+        ts = r["ts_utc"]
+        total = r["total_views"]
+        delta = None
+        if prev is not None and total is not None and prev is not None:
+            try:
+                delta = total - prev
+            except Exception:
+                delta = None
+        out.append({"ts_utc": ts, "ts_ist": ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S"), "total": total, "delta": delta})
+        prev = total
+
+    return render_template("mrbeast.html", samples=out, channel_id=MRBEAST_CHANNEL_ID, enabled=bool(MR_YT))
+
 
 @app.get("/video/<video_id>")
 @login_required
