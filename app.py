@@ -873,69 +873,91 @@ def sleep_until_next_half_hour_IST():
 # Replace your existing mrbeast_sampler_loop with this version
 def mrbeast_sampler_loop():
     """
-    Background loop — aligned to IST half-hour marks.
-    Uses ONLY the uploads-playlist -> videos -> sum(viewCount) method.
-    Caches the uploads list (via _mr_get_all_video_ids) to avoid excessive playlistItems calls.
-    Writes snapshots to channel_stats(channel_id, ts_utc, total_views).
+    MRBeast sampler — ONLY uploads-playlist SUM logic
+    - Runs every IST half-hour (:00 / :30)
+    - Skips duplicate half-hour buckets
+    - Skips unchanged totals
+    - Writes channel_stats with source='uploads_sum'
     """
-    log.info("MrBeast sampler started (IST half-hour, using uploads-sum only).")
+    log.info("MrBeast sampler started (IST half-hour, uploads-sum only).")
 
-    # use MR_YT (dedicated key) if available, otherwise fall back to main YOUTUBE client
-    client = None
-    if 'MR_YT' in globals() and MR_YT:
-        client = MR_YT
-    elif YOUTUBE:
-        client = YOUTUBE
-
+    client = MR_YT if MR_YT else YOUTUBE
     if not client:
-        log.warning("No YouTube client available for MrBeast sampler (set MRBEAST_API_KEY or YOUTUBE key). Exiting mrbeast sampler thread.")
+        log.warning("No YouTube client for MrBeast sampler.")
         return
 
-    # inexpensive warm cache fetch (so first run is faster)
+    # warm cache
     try:
         _mr_get_all_video_ids(use_cache=True)
     except Exception:
-        # ignore, will be retried in loop
         pass
 
     while True:
         try:
             sleep_until_next_half_hour_IST()
             tsu = now_utc()
+            now_ist = tsu.astimezone(IST)
 
-            # Step 2 only: get all video ids (cached) then sum viewCounts in batches
-            total = None
-            try:
-                video_ids = _mr_get_all_video_ids(use_cache=True)
-                if not video_ids:
-                    # try a non-cached aggressive fetch once if cache empty
-                    video_ids = _mr_get_all_video_ids(use_cache=False)
+            video_ids = _mr_get_all_video_ids(use_cache=True)
+            if not video_ids:
+                log.warning("MrBeast sampler: no video IDs.")
+                continue
 
-                if video_ids:
-                    total = _mr_sum_views_for_video_ids(video_ids)
-                else:
-                    log.warning("MrBeast sampler: no video IDs found for uploads playlist.")
-                    total = None
-            except Exception as e:
-                log.exception("MrBeast sampler: error while fetching/summing uploads videos: %s", e)
-                total = None
+            total = _mr_sum_views_for_video_ids(video_ids)
+            if total is None:
+                log.warning("MrBeast sampler: total is None.")
+                continue
 
-            # store snapshot (allow total to be NULL if we couldn't compute)
-            try:
-                conn = db()
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "INSERT INTO channel_stats (channel_id, ts_utc, total_views) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
-                        (MRBEAST_CHANNEL_ID, tsu, total)
-                    )
-                log.debug("MrBeast sampler: inserted snapshot ts=%s total=%s", tsu.isoformat(), str(total))
-            except Exception as e:
-                log.exception("MrBeast sampler: DB insert failed: %s", e)
+            conn = db()
+            with conn.cursor() as cur:
+                # get last snapshot
+                cur.execute(
+                    "SELECT ts_utc, total_views FROM channel_stats "
+                    "WHERE channel_id=%s AND source='uploads_sum' "
+                    "ORDER BY ts_utc DESC LIMIT 1",
+                    (MRBEAST_CHANNEL_ID,)
+                )
+                last = cur.fetchone()
+
+                skip = False
+                if last:
+                    last_ts = last["ts_utc"]
+                    last_total = last["total_views"]
+
+                    last_ist = last_ts.astimezone(IST)
+
+                    # same half-hour bucket → skip
+                    if (
+                        last_ist.hour == now_ist.hour
+                        and (last_ist.minute // 30) == (now_ist.minute // 30)
+                    ):
+                        skip = True
+
+                    # unchanged total → skip
+                    if last_total == total:
+                        skip = True
+
+                if skip:
+                    log.debug("MrBeast sampler: skipped duplicate / unchanged snapshot.")
+                    continue
+
+                cur.execute(
+                    """
+                    INSERT INTO channel_stats (channel_id, ts_utc, total_views, source)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (MRBEAST_CHANNEL_ID, tsu, total, "uploads_sum")
+                )
+
+                log.info(
+                    "MrBeast snapshot stored: ts=%s total=%s",
+                    tsu.isoformat(),
+                    total
+                )
 
         except Exception as e:
-            # catch-all to keep the background thread alive
-            log.exception("MrBeast sampler main loop error: %s", e)
-            # back off a little to avoid tight error loop
+            log.exception("MrBeast sampler error: %s", e)
             time.sleep(5)
 
 
@@ -1816,38 +1838,49 @@ def home():
 @login_required
 def mrbeast_stats():
     """
-    Simple page that shows recent MRBeast channel total views (half-hour samples)
-    and the delta since previous sample.
+    Shows MRBeast channel total views
+    (ONLY uploads-sum snapshots)
     """
     if not MRBEAST_CHANNEL_ID:
-        flash("MRBeast channel id not configured.", "warning")
+        flash("MRBeast channel not configured.", "warning")
         return redirect(url_for("home"))
 
     conn = db()
     with conn.cursor() as cur:
-        # fetch last 240 samples (~30 days if every 30m) but keep it bounded
         cur.execute(
-            "SELECT ts_utc, total_views FROM channel_stats WHERE channel_id=%s ORDER BY ts_utc DESC LIMIT 240",
+            """
+            SELECT ts_utc, total_views
+            FROM channel_stats
+            WHERE channel_id=%s AND source='uploads_sum'
+            ORDER BY ts_utc DESC
+            LIMIT 240
+            """,
             (MRBEAST_CHANNEL_ID,)
         )
         rows = cur.fetchall()
 
-    # build list newest-first with delta
     out = []
-    prev = None
+    prev_total = None
     for r in rows:
-        ts = r["ts_utc"]
         total = r["total_views"]
         delta = None
-        if prev is not None and total is not None and prev is not None:
-            try:
-                delta = total - prev
-            except Exception:
-                delta = None
-        out.append({"ts_utc": ts, "ts_ist": ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S"), "total": total, "delta": delta})
-        prev = total
+        if prev_total is not None and total is not None:
+            delta = total - prev_total
 
-    return render_template("mrbeast.html", samples=out, channel_id=MRBEAST_CHANNEL_ID, enabled=bool(MR_YT))
+        out.append({
+            "ts_utc": r["ts_utc"],
+            "ts_ist": r["ts_utc"].astimezone(IST).strftime("%Y-%m-%d %H:%M:%S"),
+            "total": total,
+            "delta": delta
+        })
+        prev_total = total
+
+    return render_template(
+        "mrbeast.html",
+        samples=out,
+        channel_id=MRBEAST_CHANNEL_ID,
+        enabled=True
+    )
 
 
 @app.get("/video/<video_id>")
