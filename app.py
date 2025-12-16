@@ -856,10 +856,12 @@ def sampler_loop():
         except Exception as e:
             log.exception("Sampler error: %s", e)
             time.sleep(5)
-def _sleep_until_next_half_hour_IST():
-    """Sleep until next :00 or :30 aligned to IST (second=0)."""
+# Add this helper (or replace if you already have a similar one)
+def sleep_until_next_half_hour_IST():
+    """
+    Sleep until the next :00 or :30 boundary in IST (aligned).
+    """
     now_ist = datetime.now(IST).replace(microsecond=0)
-    # If minute <30 -> target = :30, else target = next hour :00
     if now_ist.minute < 30:
         next_tick = now_ist.replace(minute=30, second=0)
     else:
@@ -868,114 +870,74 @@ def _sleep_until_next_half_hour_IST():
     if secs > 0:
         time.sleep(secs)
 
+# Replace your existing mrbeast_sampler_loop with this version
 def mrbeast_sampler_loop():
     """
-    Background loop — align to IST half-hour marks and store MrBeast channel total
-    into channel_stats. Uses MR_YT (dedicated key) if available, else falls back to global YOUTUBE.
-    Strategy:
-      1. Try cheap channels().list(part="statistics") for viewCount.
-      2. If unavailable, fetch uploads playlist and sum videos (cached list).
-      3. Insert (channel_id, ts_utc, total_views) into channel_stats (ON CONFLICT DO NOTHING).
+    Background loop — aligned to IST half-hour marks.
+    Uses ONLY the uploads-playlist -> videos -> sum(viewCount) method.
+    Caches the uploads list (via _mr_get_all_video_ids) to avoid excessive playlistItems calls.
+    Writes snapshots to channel_stats(channel_id, ts_utc, total_views).
     """
-    log.info("MrBeast sampler started (aligned to IST half-hour).")
+    log.info("MrBeast sampler started (IST half-hour, using uploads-sum only).")
 
-    client_fallback = MR_YT or YOUTUBE  # prefer MR_YT, else fallback to main client
+    # use MR_YT (dedicated key) if available, otherwise fall back to main YOUTUBE client
+    client = None
+    if 'MR_YT' in globals() and MR_YT:
+        client = MR_YT
+    elif YOUTUBE:
+        client = YOUTUBE
+
+    if not client:
+        log.warning("No YouTube client available for MrBeast sampler (set MRBEAST_API_KEY or YOUTUBE key). Exiting mrbeast sampler thread.")
+        return
+
+    # inexpensive warm cache fetch (so first run is faster)
+    try:
+        _mr_get_all_video_ids(use_cache=True)
+    except Exception:
+        # ignore, will be retried in loop
+        pass
 
     while True:
         try:
-            # align to IST half-hour
-            _sleep_until_next_half_hour_IST()
+            sleep_until_next_half_hour_IST()
             tsu = now_utc()
 
+            # Step 2 only: get all video ids (cached) then sum viewCounts in batches
             total = None
-            client = MR_YT or YOUTUBE
+            try:
+                video_ids = _mr_get_all_video_ids(use_cache=True)
+                if not video_ids:
+                    # try a non-cached aggressive fetch once if cache empty
+                    video_ids = _mr_get_all_video_ids(use_cache=False)
 
-            # 1) Try channel-level stat (cheap)
-            if client:
-                try:
-                    resp = client.channels().list(part="statistics", id=MRBEAST_CHANNEL_ID, maxResults=1).execute()
-                    items = resp.get("items", [])
-                    if items:
-                        vc = items[0].get("statistics", {}).get("viewCount")
-                        if vc is not None:
-                            total = int(vc)
-                except Exception as e:
-                    log.debug("mrbeast: channel stat fetch failed (will try full-sum): %s", e)
+                if video_ids:
+                    total = _mr_sum_views_for_video_ids(video_ids)
+                else:
+                    log.warning("MrBeast sampler: no video IDs found for uploads playlist.")
+                    total = None
+            except Exception as e:
+                log.exception("MrBeast sampler: error while fetching/summing uploads videos: %s", e)
+                total = None
 
-            # 2) If not available, try the expensive full-sum of uploads (playlist->videos)
-            if total is None and MR_YT:
-                # prefer dedicated MR_YT for playlist/video API calls to avoid polluting global quota
-                try:
-                    vids = _mr_get_all_video_ids(use_cache=True)
-                    if vids:
-                        total = _mr_sum_views_for_video_ids(vids)
-                except Exception as e:
-                    log.exception("mrbeast: full-sum attempt failed: %s", e)
-            elif total is None and YOUTUBE and not MR_YT:
-                # no MR_YT but global YOUTUBE exists; use global client to fetch playlist + sum
-                try:
-                    # fetch uploads playlist id using global client (fallback)
-                    try:
-                        resp = YOUTUBE.channels().list(part="contentDetails", id=MRBEAST_CHANNEL_ID, maxResults=1).execute()
-                        items = resp.get("items", [])
-                        plid = None
-                        if items:
-                            plid = items[0]["contentDetails"]["relatedPlaylists"].get("uploads")
-                    except Exception:
-                        plid = None
-
-                    if plid:
-                        # fetch all video ids using the global client
-                        vids = []
-                        next_tok = None
-                        while True:
-                            resp = YOUTUBE.playlistItems().list(
-                                part="contentDetails",
-                                playlistId=plid,
-                                maxResults=50,
-                                pageToken=next_tok,
-                                fields="nextPageToken,items(contentDetails/videoId)"
-                            ).execute()
-                            for it in resp.get("items", []):
-                                vid = it.get("contentDetails", {}).get("videoId")
-                                if vid:
-                                    vids.append(vid)
-                            next_tok = resp.get("nextPageToken")
-                            if not next_tok:
-                                break
-                            time.sleep(0.08)
-                        # sum via global client in chunks of 50
-                        total_local = 0
-                        for i in range(0, len(vids), 50):
-                            chunk = vids[i:i+50]
-                            resp = YOUTUBE.videos().list(part="statistics", id=",".join(chunk), maxResults=50,
-                                                         fields="items/statistics(viewCount)").execute()
-                            for it in resp.get("items", []):
-                                try:
-                                    total_local += int(it.get("statistics", {}).get("viewCount", 0) or 0)
-                                except Exception:
-                                    pass
-                            time.sleep(0.08)
-                        total = total_local
-                except Exception as e:
-                    log.exception("mrbeast: fallback global-sum failed: %s", e)
-
-            # Insert into DB (same pattern as sampler)
-            conn = db()
-            with conn.cursor() as cur:
-                try:
+            # store snapshot (allow total to be NULL if we couldn't compute)
+            try:
+                conn = db()
+                with conn.cursor() as cur:
                     cur.execute(
                         "INSERT INTO channel_stats (channel_id, ts_utc, total_views) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
                         (MRBEAST_CHANNEL_ID, tsu, total)
                     )
-                except Exception:
-                    log.exception("mrbeast: Insert channel_stats failed for %s", MRBEAST_CHANNEL_ID)
+                log.debug("MrBeast sampler: inserted snapshot ts=%s total=%s", tsu.isoformat(), str(total))
+            except Exception as e:
+                log.exception("MrBeast sampler: DB insert failed: %s", e)
 
-            log.info("mrbeast sampler tick at %s — total=%s", tsu.isoformat(), total)
         except Exception as e:
-            log.exception("mrbeast sampler error: %s", e)
-            # avoid tight-failure loop
-            time.sleep(10)
+            # catch-all to keep the background thread alive
+            log.exception("MrBeast sampler main loop error: %s", e)
+            # back off a little to avoid tight error loop
+            time.sleep(5)
+
 
 
 def start_background():
