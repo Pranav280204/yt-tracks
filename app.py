@@ -63,6 +63,16 @@ if MRBEAST_API_KEY:
         log.info("MRBeast YouTube client ready.")
     except Exception as e:
         log.exception("MRBeast YT init failed: %s", e)
+# Cache TTL for uploads list (seconds). Default 6 hours to avoid expensive full list every 30m.
+MR_UPLOADS_CACHE_TTL = int(os.getenv("MR_UPLOADS_CACHE_TTL", str(6 * 3600)))
+
+# in-memory cache for uploads playlist id / video ids
+_mr_uploads_cache = {
+    "playlist_id": None,
+    "video_ids": None,
+    "fetched_at": 0.0
+}
+
 
 def require_admin_secret_from_form(form, redirect_endpoint, **redirect_kwargs):
     """
@@ -145,7 +155,95 @@ def get_latest_channel_totals_for(channel_ids: list[str]) -> dict:
     for ch in channel_ids:
         out.setdefault(ch, None)
     return out
+    
+def _mr_fetch_uploads_playlist_id():
+    """Return uploads playlist id for MRBEAST_CHANNEL_ID using MR_YOUTUBE client."""
+    if not MR_YOUTUBE:
+        return None
+    try:
+        r = MR_YOUTUBE.channels().list(part="contentDetails", id=MRBEAST_CHANNEL_ID, maxResults=1).execute()
+        items = r.get("items", [])
+        if not items:
+            return None
+        return items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+    except Exception as e:
+        log.exception("Failed to get uploads playlist id: %s", e)
+        return None
 
+
+def _mr_get_all_video_ids(use_cache=True):
+    """
+    Return list of all video ids from the uploads playlist.
+    Uses in-memory cache for MR_UPLOADS_CACHE_TTL seconds to avoid hitting playlistItems each half-hour.
+    """
+    now_ts = time.time()
+    # return cached if fresh
+    if use_cache and _mr_uploads_cache.get("video_ids") and (now_ts - _mr_uploads_cache.get("fetched_at", 0) <= MR_UPLOADS_CACHE_TTL):
+        return list(_mr_uploads_cache["video_ids"])
+
+    playlist_id = _mr_uploads_cache.get("playlist_id")
+    if not playlist_id:
+        playlist_id = _mr_fetch_uploads_playlist_id()
+        _mr_uploads_cache["playlist_id"] = playlist_id
+
+    if not playlist_id:
+        return []
+
+    video_ids = []
+    next_tok = None
+    try:
+        while True:
+            resp = MR_YOUTUBE.playlistItems().list(
+                part="contentDetails",
+                playlistId=playlist_id,
+                maxResults=50,
+                pageToken=next_tok,
+                fields="nextPageToken,items(contentDetails/videoId)"
+            ).execute()
+            for it in resp.get("items", []):
+                vid = it.get("contentDetails", {}).get("videoId")
+                if vid:
+                    video_ids.append(vid)
+            next_tok = resp.get("nextPageToken")
+            if not next_tok:
+                break
+            # slight polite pause
+            time.sleep(0.08)
+    except Exception as e:
+        log.exception("Error fetching playlist items for MrBeast: %s", e)
+        # still cache whatever we got, but mark time so we retry soon
+    # update cache
+    _mr_uploads_cache["video_ids"] = video_ids
+    _mr_uploads_cache["fetched_at"] = now_ts
+    return video_ids
+
+
+def _mr_sum_views_for_video_ids(video_ids: list[str]):
+    """
+    Sum viewCounts for the provided list of video_ids in chunks of 50.
+    Returns integer total or None if nothing found.
+    """
+    if not MR_YOUTUBE or not video_ids:
+        return None
+    total = 0
+    try:
+        for i in range(0, len(video_ids), 50):
+            chunk = video_ids[i:i + 50]
+            resp = MR_YOUTUBE.videos().list(part="statistics", id=",".join(chunk), maxResults=50,
+                                            fields="items/statistics(viewCount)").execute()
+            for it in resp.get("items", []):
+                try:
+                    vc = int(it.get("statistics", {}).get("viewCount", 0) or 0)
+                except Exception:
+                    vc = 0
+                total += vc
+            # small pause to avoid bursts
+            time.sleep(0.08)
+    except Exception as e:
+        log.exception("Error summing video stats for MrBeast: %s", e)
+        return None
+    return total
+    
 def get_latest_sample_per_video(video_ids: list[str]) -> dict:
     """
     Return dict video_id -> row {video_id, ts_utc, views} for the latest ts_utc per video.
@@ -760,45 +858,45 @@ def sampler_loop():
             time.sleep(5)
 def mrbeast_sampler_loop():
     """
-    Runs every half-hour (UTC aligned). Fetches MrBeast channel total views using MR_YT
-    and writes to channel_stats table (same table used for other snapshots).
+    Background loop — align to IST half-hour marks and store MrBeast channel total
+    into channel_stats (same table your other sampler uses).
+    Uses MRBEAST_API_KEY if set; will fall back to a channel-level statistic first,
+    and fall back to summing uploads (playlist -> videos) if needed.
     """
-    if not MR_YT or not MRBEAST_CHANNEL_ID:
-        log.info("MRBeast sampler not started — MR_YT or channel id missing.")
-        return
+    log.info("MrBeast sampler started (aligned to IST half-hour).")
 
-    log.info("MRBeast sampler loop started (aligned to UTC half-hour).")
+    # create a dedicated MR_YOUTUBE client if API key provided
+    MR_YOUTUBE = None
+    if MRBEAST_API_KEY:
+        try:
+            MR_YOUTUBE = build("youtube", "v3", developerKey=MRBEAST_API_KEY, cache_discovery=False)
+            log.info("MrBeast YouTube client ready (own key).")
+        except Exception as e:
+            log.exception("Failed to init MrBeast YouTube client: %s", e)
+            MR_YOUTUBE = None
+
     while True:
         try:
-            sleep_until_next_half_hour_utc()
+            _sleep_until_next_half_hour_IST()
             tsu = now_utc()
-            try:
-                resp = MR_YT.channels().list(part="statistics", id=MRBEAST_CHANNEL_ID, maxResults=1).execute()
-                items = resp.get("items", [])
-                if not items:
-                    log.warning("MRBeast channels list returned no items.")
-                    total = None
-                else:
-                    total = int(items[0].get("statistics", {}).get("viewCount", 0) or 0)
-            except Exception as e:
-                log.exception("MRBeast fetch error: %s", e)
-                total = None
 
-            # store in DB channel_stats
-            try:
-                conn = db()
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "INSERT INTO channel_stats (channel_id, ts_utc, total_views) VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
-                        (MRBEAST_CHANNEL_ID, tsu, total)
-                    )
-                log.info("MRBeast snapshot at %s -> %s", tsu.isoformat(), str(total))
-            except Exception as e:
-                log.exception("Failed to insert MRBeast snapshot: %s", e)
+            total = None
 
-        except Exception as e:
-            log.exception("MRBeast sampler loop error: %s", e)
-            time.sleep(10)
+            # Helper: fast channel-level stat (cheap single call)
+            def _try_channel_stat():
+                nonlocal total
+                client = MR_YOUTUBE or YOUTUBE
+                if not client:
+                    return
+                try:
+                    resp = client.channels().list(part="statistics", id=MRBEAST_CHANNEL_ID, maxResults=1).execute()
+                    items = resp.get("items", [])
+                    if items:
+                        vc = items[0].get("statistics", {}).get("viewCount")
+                        if vc is not None:
+                            total = int(vc)
+                except Exception as e:
+                    log.debug("MrBeast channel stat fetch failed (will try full-sum): %s", e)
 
 def start_background():
     global _sampler_started
