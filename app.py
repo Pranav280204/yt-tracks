@@ -1674,7 +1674,7 @@ def home():
     
 @app.get("/mrbeast")
 @login_required
-def mrbeast_overview():
+def mrbeast_stats():
     """
     Simple page that shows recent MRBeast channel total views (half-hour samples)
     and the delta since previous sample.
