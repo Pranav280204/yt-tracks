@@ -242,6 +242,14 @@ def _mr_sum_views_for_video_ids(video_ids: list[str]):
         log.exception("Error summing video stats for MrBeast: %s", e)
         return None
     return total
+def current_half_hour_utc_from_ist():
+    """
+    Return the exact :00 or :30 IST boundary converted to UTC
+    """
+    now_ist = datetime.now(IST).replace(second=0, microsecond=0)
+    minute = 0 if now_ist.minute < 30 else 30
+    snapped_ist = now_ist.replace(minute=minute)
+    return snapped_ist.astimezone(timezone.utc)
 
     
 def get_latest_sample_per_video(video_ids: list[str]) -> dict:
@@ -911,7 +919,7 @@ def mrbeast_sampler_loop():
     while True:
         try:
             sleep_until_next_half_hour_IST()
-            tsu = now_utc()
+            tsu = current_half_hour_utc_from_ist()
             now_ist = tsu.astimezone(IST)
 
             video_ids = _mr_get_all_video_ids(use_cache=True)
