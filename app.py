@@ -157,11 +157,11 @@ def get_latest_channel_totals_for(channel_ids: list[str]) -> dict:
     return out
     
 def _mr_fetch_uploads_playlist_id():
-    """Return uploads playlist id for MRBEAST_CHANNEL_ID using MR_YOUTUBE client."""
-    if not MR_YOUTUBE:
+    """Return uploads playlist id for MRBEAST_CHANNEL_ID using MR_YT client."""
+    if not MR_YT:
         return None
     try:
-        r = MR_YOUTUBE.channels().list(part="contentDetails", id=MRBEAST_CHANNEL_ID, maxResults=1).execute()
+        r = MR_YT.channels().list(part="contentDetails", id=MRBEAST_CHANNEL_ID, maxResults=1).execute()
         items = r.get("items", [])
         if not items:
             return None
@@ -193,7 +193,7 @@ def _mr_get_all_video_ids(use_cache=True):
     next_tok = None
     try:
         while True:
-            resp = MR_YOUTUBE.playlistItems().list(
+            resp = MR_YT.playlistItems().list(
                 part="contentDetails",
                 playlistId=playlist_id,
                 maxResults=50,
@@ -223,26 +223,26 @@ def _mr_sum_views_for_video_ids(video_ids: list[str]):
     Sum viewCounts for the provided list of video_ids in chunks of 50.
     Returns integer total or None if nothing found.
     """
-    if not MR_YOUTUBE or not video_ids:
+    if not MR_YT or not video_ids:
         return None
     total = 0
     try:
         for i in range(0, len(video_ids), 50):
             chunk = video_ids[i:i + 50]
-            resp = MR_YOUTUBE.videos().list(part="statistics", id=",".join(chunk), maxResults=50,
-                                            fields="items/statistics(viewCount)").execute()
+            resp = MR_YT.videos().list(part="statistics", id=",".join(chunk), maxResults=50,
+                                       fields="items/statistics(viewCount)").execute()
             for it in resp.get("items", []):
                 try:
                     vc = int(it.get("statistics", {}).get("viewCount", 0) or 0)
                 except Exception:
                     vc = 0
                 total += vc
-            # small pause to avoid bursts
             time.sleep(0.08)
     except Exception as e:
         log.exception("Error summing video stats for MrBeast: %s", e)
         return None
     return total
+
     
 def get_latest_sample_per_video(video_ids: list[str]) -> dict:
     """
@@ -303,6 +303,22 @@ def init_db():
         cur.execute("""
         ALTER TABLE users
         ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+        """)
+                # Channel snapshots ----------------------------------
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS channel_stats (
+          channel_id TEXT NOT NULL,
+          ts_utc TIMESTAMPTZ NOT NULL,
+          total_views BIGINT,
+          source TEXT,
+          PRIMARY KEY (channel_id, ts_utc)
+        );
+        """)
+
+        # in case this was added after older runs, ensure column exists
+        cur.execute("""
+        ALTER TABLE channel_stats
+        ADD COLUMN IF NOT EXISTS source TEXT;
         """)
 
         cur.execute("""
@@ -970,7 +986,7 @@ def start_background():
             t.start()
             log.info("Background sampler started.")
             # start MRBeast sampler if configured
-            if MR_YT and MRBEAST_CHANNEL_ID:
+            if (MR_YT or YOUTUBE) and MRBEAST_CHANNEL_ID:
                 t2 = threading.Thread(target=mrbeast_sampler_loop, daemon=True, name="mrbeast-sampler")
                 t2.start()
                 log.info("MRBeast sampler thread started.")
@@ -1838,8 +1854,7 @@ def home():
 @login_required
 def mrbeast_stats():
     """
-    Shows MRBeast channel total views
-    (ONLY uploads-sum snapshots)
+    Shows MRBeast channel total views (prefers uploads_sum snapshots; falls back to legacy rows).
     """
     if not MRBEAST_CHANNEL_ID:
         flash("MRBeast channel not configured.", "warning")
@@ -1847,9 +1862,10 @@ def mrbeast_stats():
 
     conn = db()
     with conn.cursor() as cur:
+        # 1) try uploads_sum first
         cur.execute(
             """
-            SELECT ts_utc, total_views
+            SELECT ts_utc, total_views, source
             FROM channel_stats
             WHERE channel_id=%s AND source='uploads_sum'
             ORDER BY ts_utc DESC
@@ -1859,28 +1875,49 @@ def mrbeast_stats():
         )
         rows = cur.fetchall()
 
+        # 2) if none found, fallback to any legacy/NULL source rows
+        if not rows:
+            cur.execute(
+                """
+                SELECT ts_utc, total_views, source
+                FROM channel_stats
+                WHERE channel_id=%s
+                ORDER BY ts_utc DESC
+                LIMIT 240
+                """,
+                (MRBEAST_CHANNEL_ID,)
+            )
+            rows = cur.fetchall()
+
     out = []
     prev_total = None
+    # rows are newest-first already; compute delta vs previous row in that order
     for r in rows:
         total = r["total_views"]
         delta = None
         if prev_total is not None and total is not None:
-            delta = total - prev_total
+            try:
+                delta = total - prev_total
+            except Exception:
+                delta = None
 
         out.append({
             "ts_utc": r["ts_utc"],
             "ts_ist": r["ts_utc"].astimezone(IST).strftime("%Y-%m-%d %H:%M:%S"),
             "total": total,
-            "delta": delta
+            "delta": delta,
+            "source": r.get("source")
         })
         prev_total = total
 
+    # enable flag if any client available (keeps UI same)
     return render_template(
         "mrbeast.html",
         samples=out,
         channel_id=MRBEAST_CHANNEL_ID,
-        enabled=True
+        enabled=bool(MR_YT or YOUTUBE)
     )
+
 
 
 @app.get("/video/<video_id>")
