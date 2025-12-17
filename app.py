@@ -1104,14 +1104,14 @@ def start_background():
             # start MRBeast sampler if configured
                # start MRBeast sampler if configured
             if (MR_YT or YOUTUBE) and MRBEAST_CHANNEL_ID:
-            t2 = threading.Thread(target=mrbeast_sampler_loop, daemon=True, name="mrbeast-sampler")
-            t2.start()
-            log.info("MRBeast sampler thread started.")
+                t2 = threading.Thread(target=mrbeast_sampler_loop, daemon=True, name="mrbeast-sampler")
+                t2.start()
+                log.info("MRBeast sampler thread started.")
 
              # start 10-min uploads-sum sampler
-            t3 = threading.Thread(target=mrbeast_10min_sampler_loop, daemon=True, name="mrbeast-10min-sampler")
-            t3.start()
-            log.info("MRBeast 10-min sampler thread started.")
+                t3 = threading.Thread(target=mrbeast_10min_sampler_loop, daemon=True, name="mrbeast-10min-sampler")
+                t3.start()
+                log.info("MRBeast 10-min sampler thread started.")
 
             _sampler_started = True
 
