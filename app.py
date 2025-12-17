@@ -550,6 +550,30 @@ def fetch_channel_id_for_videos(video_ids: list[str]) -> dict:
         out.setdefault(vid, None)
     return out
 
+# --- paste near other "sleep_until_next_..." and "current_half_hour_utc_from_ist" helpers ---
+def sleep_until_next_10min_IST():
+    """
+    Sleep until the next 10-minute boundary in IST (e.g. :00, :10, :20, ...).
+    """
+    now_ist = datetime.now(IST).replace(microsecond=0)
+    next_min = ((now_ist.minute // 10) + 1) * 10
+    if next_min >= 60:
+        next_tick = now_ist.replace(minute=0, second=0) + timedelta(hours=1)
+    else:
+        next_tick = now_ist.replace(minute=next_min, second=0)
+    secs = (next_tick - now_ist).total_seconds()
+    if secs > 0:
+        time.sleep(secs)
+
+def current_10min_utc_from_ist():
+    """
+    Return a timezone-aware UTC datetime snapped to the current 10-minute IST bucket start.
+    Example: 10:17 IST -> snaps to 10:10:00 IST -> converted to UTC
+    """
+    now_ist = datetime.now(IST).replace(second=0, microsecond=0)
+    minute = (now_ist.minute // 10) * 10
+    snapped_ist = now_ist.replace(minute=minute, second=0)
+    return snapped_ist.astimezone(timezone.utc)
 
 def fetch_stats_batch(video_ids: list[str]) -> dict:
     if not YOUTUBE or not video_ids:
@@ -984,6 +1008,90 @@ def mrbeast_sampler_loop():
             log.exception("MrBeast sampler error: %s", e)
             time.sleep(5)
 
+def mrbeast_10min_sampler_loop():
+    """
+    Background loop — every IST 10-minute boundary:
+      - fetch uploads list (cached) and sum viewCounts for all videos
+      - insert into channel_stats with source='uploads_sum_10min'
+      - skip if same 10-min bucket as last snapshot or if total unchanged
+    """
+    log.info("MrBeast 10-min sampler started (IST 10-min uploads-sum).")
+    client = MR_YT if MR_YT else YOUTUBE
+    if not client:
+        log.warning("No YouTube client available for MrBeast 10-min sampler.")
+        return
+
+    # warm cache
+    try:
+        _mr_get_all_video_ids(use_cache=True)
+    except Exception:
+        pass
+
+    while True:
+        try:
+            sleep_until_next_10min_IST()
+            tsu = current_10min_utc_from_ist()
+            now_ist = tsu.astimezone(IST)
+
+            # get video ids (try cached)
+            video_ids = _mr_get_all_video_ids(use_cache=True)
+            if not video_ids:
+                # try aggressive non-cached fetch once
+                video_ids = _mr_get_all_video_ids(use_cache=False)
+                if not video_ids:
+                    log.warning("MrBeast 10-min sampler: no video IDs.")
+                    continue
+
+            total = _mr_sum_views_for_video_ids(video_ids)
+            if total is None:
+                log.warning("MrBeast 10-min sampler: total is None.")
+                continue
+
+            conn = db()
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT ts_utc, total_views FROM channel_stats "
+                    "WHERE channel_id=%s AND source='uploads_sum_10min' "
+                    "ORDER BY ts_utc DESC LIMIT 1",
+                    (MRBEAST_CHANNEL_ID,)
+                )
+                last = cur.fetchone()
+
+                skip = False
+                if last:
+                    last_ts = last["ts_utc"]
+                    last_total = last["total_views"]
+                    last_ist = last_ts.astimezone(IST)
+
+                    # same 10-min bucket -> skip
+                    if (
+                        last_ist.hour == now_ist.hour
+                        and (last_ist.minute // 10) == (now_ist.minute // 10)
+                    ):
+                        skip = True
+
+                    # unchanged total -> skip
+                    if last_total == total:
+                        skip = True
+
+                if skip:
+                    log.debug("MrBeast 10-min sampler: skipped duplicate / unchanged snapshot.")
+                    continue
+
+                cur.execute(
+                    """
+                    INSERT INTO channel_stats (channel_id, ts_utc, total_views, source)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (MRBEAST_CHANNEL_ID, tsu, total, "uploads_sum_10min")
+                )
+
+                log.info("MrBeast 10-min snapshot stored: ts=%s total=%s", tsu.isoformat(), total)
+
+        except Exception as e:
+            log.exception("MrBeast 10-min sampler error: %s", e)
+            time.sleep(5)
 
 
 def start_background():
@@ -994,10 +1102,17 @@ def start_background():
             t.start()
             log.info("Background sampler started.")
             # start MRBeast sampler if configured
+               # start MRBeast sampler if configured
             if (MR_YT or YOUTUBE) and MRBEAST_CHANNEL_ID:
-                t2 = threading.Thread(target=mrbeast_sampler_loop, daemon=True, name="mrbeast-sampler")
-                t2.start()
-                log.info("MRBeast sampler thread started.")
+            t2 = threading.Thread(target=mrbeast_sampler_loop, daemon=True, name="mrbeast-sampler")
+            t2.start()
+            log.info("MRBeast sampler thread started.")
+
+             # start 10-min uploads-sum sampler
+            t3 = threading.Thread(target=mrbeast_10min_sampler_loop, daemon=True, name="mrbeast-10min-sampler")
+            t3.start()
+            log.info("MRBeast 10-min sampler thread started.")
+
             _sampler_started = True
 
 
@@ -1857,6 +1972,73 @@ def home():
              t_db_videos - t0, t_ch_map - t_db_videos, t_ch_totals - t_ch_map, t_latest_samples - t_ch_totals, t_end - t0)
 
     return render_template("home.html", videos=vids)
+
+@app.get("/mrbeast_sum")
+@login_required
+def mrbeast_sum_stats():
+    """
+    Shows MRBeast channel total views from uploads-sum (10-minute sampler).
+    Route: /mrbeast_sum
+    """
+    if not MRBEAST_CHANNEL_ID:
+        flash("MRBeast channel not configured.", "warning")
+        return redirect(url_for("home"))
+
+    conn = db()
+    with conn.cursor() as cur:
+        # prefer the uploads_sum_10min source first
+        cur.execute(
+            """
+            SELECT ts_utc, total_views, source
+            FROM channel_stats
+            WHERE channel_id=%s AND source='uploads_sum_10min'
+            ORDER BY ts_utc DESC
+            LIMIT 240
+            """,
+            (MRBEAST_CHANNEL_ID,)
+        )
+        rows = cur.fetchall()
+
+        # fallback to any rows if none
+        if not rows:
+            cur.execute(
+                """
+                SELECT ts_utc, total_views, source
+                FROM channel_stats
+                WHERE channel_id=%s
+                ORDER BY ts_utc DESC
+                LIMIT 240
+                """,
+                (MRBEAST_CHANNEL_ID,)
+            )
+            rows = cur.fetchall()
+
+    out = []
+    prev_total = None
+    for r in rows:
+        total = r["total_views"]
+        delta = None
+        if prev_total is not None and total is not None:
+            try:
+                delta = total - prev_total
+            except Exception:
+                delta = None
+        out.append({
+            "ts_utc": r["ts_utc"],
+            "ts_ist": r["ts_utc"].astimezone(IST).strftime("%Y-%m-%d %H:%M:%S"),
+            "total": total,
+            "delta": delta,
+            "source": r.get("source")
+        })
+        prev_total = total
+
+    return render_template(
+        "mrbeast.html",  # reuse same template for display consistency
+        samples=out,
+        channel_id=MRBEAST_CHANNEL_ID,
+        enabled=bool(MR_YT or YOUTUBE)
+    )
+
     
 @app.get("/mrbeast")
 @login_required
