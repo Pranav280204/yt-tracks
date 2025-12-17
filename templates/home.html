@@ -27,7 +27,7 @@
         <span class="small text-muted d-none d-sm-inline">Logged in as <strong>{{ current_user.username }}</strong></span>
 
         <!-- NEW: MrBeast channel stats button -->
-        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('mrbeast_stats') }}">MrBeast Channel</a>
+        <a class="btn btn-sm btn-outline-primary" href="{{ url_for('mrbeast_sum_stats') }}">MrBeast Channel</a>
 
         <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin_users') }}">Add user</a>
         <a class="btn btn-sm btn-outline-danger" href="{{ url_for('logout') }}">Logout</a>
