@@ -259,6 +259,9 @@
                       <th>Change 24h vs prev day (%)</th>
                       <th>Projected (min) views</th>
                       <th>Compare diff</th>
+                      <th>Likes</th>
+                      <th>Comments</th>
+                      <th>Engagement (%)</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -272,6 +275,9 @@
                       {% set pct24 = row[5] if row|length > 5 else None %}
                       {% set projected = row[6] if row|length > 6 else None %}
                       {% set comp_diff = row[7] if row|length > 7 else None %}
+                      {% set likes = row[9] if row|length > 9 else None %}
+                      {% set comments = row[10] if row|length > 10 else None %}
+                      {% set engagement = row[11] if row|length > 11 else None %}
                       <tr>
                         <td class="mono">{{ ts }}</td>
                         <td class="mono">
@@ -312,6 +318,19 @@
                           {% if comp_diff is none %}<span class="gain-null">—</span>
                           {% elif comp_diff >= 0 %}<span class="gain-pos">+{{ "{:,}".format(comp_diff) }}</span>
                           {% else %}<span class="gain-neg">{{ "{:,}".format(comp_diff) }}</span>{% endif %}
+                        </td>
+
+                        <td class="mono">
+                          {% if likes is none %}—{% else %}{{ "{:,}".format(likes) }}{% endif %}
+                        </td>
+
+                        <td class="mono">
+                          {% if comments is none %}—{% else %}{{ "{:,}".format(comments) }}{% endif %}
+                        </td>
+
+                        <td>
+                          {% if engagement is none %}<span class="gain-null">—</span>
+                          {% else %}{{ ('{:.3f}'.format(engagement)) }}%{% endif %}
                         </td>
                       </tr>
                     {% endfor %}
