@@ -3,6 +3,8 @@ import os
 import threading
 import logging
 import time
+import hashlib
+import json
 import math
 import secrets
 import bisect
@@ -352,6 +354,39 @@ def init_db():
           is_tracking BOOLEAN NOT NULL DEFAULT TRUE
         );
         """)
+                # Thumbnail tracking columns
+        cur.execute("""
+        ALTER TABLE video_list
+        ADD COLUMN IF NOT EXISTS thumbnail_url TEXT;
+        """)
+        cur.execute("""
+        ALTER TABLE video_list
+        ADD COLUMN IF NOT EXISTS thumbnail_hash TEXT;
+        """)
+        cur.execute("""
+        ALTER TABLE video_list
+        ADD COLUMN IF NOT EXISTS thumbnail_prev_url TEXT;
+        """)
+        cur.execute("""
+        ALTER TABLE video_list
+        ADD COLUMN IF NOT EXISTS thumbnail_changed BOOLEAN NOT NULL DEFAULT FALSE;
+        """)
+        cur.execute("""
+        ALTER TABLE video_list
+        ADD COLUMN IF NOT EXISTS thumbnail_changed_at TIMESTAMPTZ;
+        """)
+
+        # Notifications table for events (thumbnail changes etc)
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS notifications (
+          id SERIAL PRIMARY KEY,
+          video_id TEXT REFERENCES video_list(video_id) ON DELETE CASCADE,
+          ts_utc TIMESTAMPTZ NOT NULL,
+          type TEXT NOT NULL,
+          data JSONB,
+          is_read BOOLEAN NOT NULL DEFAULT FALSE
+        );
+        """)
 
         # ➕ NEW COLUMNS FOR COMPARISON FEATURE
         cur.execute("""
@@ -609,6 +644,93 @@ def fetch_stats_batch(video_ids: list[str]) -> dict:
     except Exception as e:
         log.exception("Stats fetch error: %s", e)
     return out
+def fetch_thumbnail_hash_for_video(video_id: str) -> tuple[str | None, str | None]:
+    """
+    Try common YouTube thumbnail URLs (maxresdefault -> hqdefault -> sddefault).
+    Returns (url, sha1_hex) or (None, None) if not available.
+    """
+    urls = [
+        f"https://i.ytimg.com/vi/{video_id}/maxresdefault.jpg",
+        f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg",
+        f"https://i.ytimg.com/vi/{video_id}/sddefault.jpg",
+    ]
+    for u in urls:
+        try:
+            r = requests.get(u, timeout=6)
+            if r.status_code == 200 and r.content:
+                h = hashlib.sha1(r.content).hexdigest()
+                return u, h
+        except Exception:
+            # network/timeout -- try next
+            continue
+    return None, None
+
+
+def check_thumbnail_change(video_id: str, force: bool = False) -> bool:
+    """
+    Check thumbnail for `video_id`. If hash differs from stored value, update video_list and
+    create a notifications row. Returns True if a change was detected and recorded.
+    Throttle: unless force=True, skip check if thumbnail_changed_at is within last 24 hours
+    and we already have a thumbnail_hash (reduces frequent downloads).
+    """
+    try:
+        conn = db()
+        nowu = now_utc()
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT thumbnail_hash, thumbnail_changed_at, thumbnail_url FROM video_list WHERE video_id=%s",
+                (video_id,)
+            )
+            r = cur.fetchone()
+            if not r:
+                return False
+
+            prev_hash = r.get("thumbnail_hash")
+            prev_changed_at = r.get("thumbnail_changed_at")
+            prev_url = r.get("thumbnail_url")
+
+            if not force and prev_hash:
+                # if we recently checked, skip (24h)
+                if prev_changed_at:
+                    try:
+                        if (nowu - prev_changed_at).total_seconds() < 24 * 3600:
+                            return False
+                    except Exception:
+                        pass
+
+        # actually fetch thumbnail bytes & hash
+        new_url, new_hash = fetch_thumbnail_hash_for_video(video_id)
+        if not new_url or not new_hash:
+            return False
+
+        # compare & update if different
+        with conn.cursor() as cur:
+            if prev_hash != new_hash:
+                # store previous url, new url/hash, mark changed
+                cur.execute(
+                    """
+                    UPDATE video_list
+                    SET thumbnail_prev_url = %s,
+                        thumbnail_url = %s,
+                        thumbnail_hash = %s,
+                        thumbnail_changed = TRUE,
+                        thumbnail_changed_at = %s
+                    WHERE video_id = %s
+                    """,
+                    (prev_url, new_url, new_hash, nowu, video_id)
+                )
+                # insert notification
+                payload = {"prev_url": prev_url, "new_url": new_url}
+                cur.execute(
+                    "INSERT INTO notifications (video_id, ts_utc, type, data) VALUES (%s, %s, %s, %s)",
+                    (video_id, nowu, "thumbnail_changed", json.dumps(payload))
+                )
+                log.info("Thumbnail changed for %s (prev=%s new=%s)", video_id, prev_url, new_url)
+                return True
+
+    except Exception as e:
+        log.exception("check_thumbnail_change error for %s: %s", video_id, e)
+    return False
 
 # -----------------------------
 # Storage helpers
@@ -886,10 +1008,16 @@ def sampler_loop():
 
             stats_map = fetch_stats_batch(vids)
             # store per-video stats
-            for vid in vids:
+                        for vid in vids:
                 st = stats_map.get(vid)
                 if st:
                     safe_store(vid, st)
+                    # best-effort thumbnail change check (non-blocking by guarding exceptions & throttle)
+                    try:
+                        # check_thumbnail_change is throttled (24h) unless force=True
+                        check_thumbnail_change(vid)
+                    except Exception:
+                        log.exception("Thumbnail check failed for %s", vid)
 
             # channel snapshots
             if YOUTUBE:
@@ -1155,7 +1283,7 @@ def build_video_display(vid: str):
     conn = db()
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT video_id, name, is_tracking, compare_video_id, compare_offset_days "
+            "SELECT video_id, name, is_tracking, compare_video_id, compare_offset_days, thumbnail_url, thumbnail_prev_url, thumbnail_changed, thumbnail_changed_at "
             "FROM video_list WHERE video_id=%s",
             (vid,)
         )
@@ -1401,7 +1529,11 @@ def build_video_display(vid: str):
         "latest_ts_iso": latest_ts_iso,
         "latest_ts_ist": latest_ts_ist,
         "channel_info": channel_info,
-        "compare_meta": compare_meta
+        "compare_meta": compare_meta,
+        "thumbnail_url": vrow.get("thumbnail_url"),
+        "thumbnail_prev_url": vrow.get("thumbnail_prev_url"),
+        "thumbnail_changed": bool(vrow.get("thumbnail_changed")),
+        "thumbnail_changed_at": vrow.get("thumbnail_changed_at")
     }
 
     # cache it
@@ -2132,7 +2264,14 @@ def video_detail(video_id):
     if info is None:
         flash("Video not found.", "warning")
         return redirect(url_for("home"))
-    info["thumbnail"] = f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+    # prefer DB-stored thumbnail (seeded earlier). Fallback to ytimg hqdefault.
+    info["thumbnail"] = info.get("thumbnail_url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+
+# also pass change flags through to template (these keys already set by build_video_display)
+    info["thumbnail_changed"] = info.get("thumbnail_changed", False)
+    info["thumbnail_changed_at"] = info.get("thumbnail_changed_at")
+    info["thumbnail_prev_url"] = info.get("thumbnail_prev_url")
+
     return render_template("video_detail.html", v=info)
 
 @app.post("/add_video")
@@ -2153,13 +2292,26 @@ def add_video():
         flash("Could not fetch stats (check API key/quota/video).", "danger")
         return redirect(url_for("home"))
 
-    conn = db()
+        conn = db()
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO video_list (video_id, name, is_tracking)
             VALUES (%s, %s, TRUE)
             ON CONFLICT (video_id) DO UPDATE SET name=EXCLUDED.name, is_tracking=TRUE
         """, (video_id, title))
+
+    # try to fetch & store thumbnail hash (best-effort)
+    try:
+        thumb_url, thumb_hash = fetch_thumbnail_hash_for_video(video_id)
+        if thumb_url and thumb_hash:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE video_list SET thumbnail_url=%s, thumbnail_hash=%s WHERE video_id=%s",
+                    (thumb_url, thumb_hash, video_id)
+                )
+    except Exception:
+        log.exception("Thumbnail seed failed for %s", video_id)
+
     safe_store(video_id, stats)
     flash(f"Now tracking: {title}", "success")
     return redirect(url_for("video_detail", video_id=video_id))
