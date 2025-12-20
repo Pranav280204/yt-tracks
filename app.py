@@ -1008,7 +1008,7 @@ def sampler_loop():
 
             stats_map = fetch_stats_batch(vids)
             # store per-video stats
-                        for vid in vids:
+            for vid in vids:
                 st = stats_map.get(vid)
                 if st:
                     safe_store(vid, st)
