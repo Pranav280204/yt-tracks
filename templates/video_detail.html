@@ -58,6 +58,9 @@
     }
     .live-sub { display:block; font-size:.85rem; color:var(--muted); margin-top:.12rem; }
 
+    /* Thumbnail alert */
+    .thumb-preview { max-width:360px; border-radius:.375rem; border:1px solid var(--border); display:block; margin-top:.5rem; }
+
     /* Channel / actions */
     .action-row { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; margin-top:.8rem; }
     .action-row .btn { min-width:110px; flex:0 0 auto; }
@@ -124,6 +127,39 @@
           <div class="small-note">No samples yet.</div>
         {% endif %}
       </div>
+
+      <!-- === NEW: Thumbnail change alert/banner === -->
+      {% if v.thumbnail_changed %}
+        <div class="alert alert-warning alert-dismissible fade show mt-3" role="alert">
+          <div class="d-flex align-items-start justify-content-between gap-2">
+            <div>
+              <strong>Thumbnail changed</strong>
+              {% if v.thumbnail_prev_url %}
+                — <a href="{{ v.thumbnail_prev_url }}" target="_blank" rel="noopener noreferrer">previous thumbnail</a>
+              {% endif %}
+              {% if v.thumbnail_changed_at %}
+                <div class="small muted mt-1">Detected: 
+                  {# If thumbnail_changed_at is a datetime, it's best if server formatted it. Fallback to raw. #}
+                  {% if v.thumbnail_changed_at is string %}
+                    {{ v.thumbnail_changed_at }}
+                  {% else %}
+                    {{ v.thumbnail_changed_at }}
+                  {% endif %}
+                </div>
+              {% endif %}
+            </div>
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+          </div>
+
+          {% if v.thumbnail %}
+            <div class="mt-3">
+              <img src="{{ v.thumbnail }}" alt="new thumbnail" class="thumb-preview">
+            </div>
+          {% endif %}
+        </div>
+      {% endif %}
+      <!-- === END thumbnail alert === -->
+
     </div>
 
     <!-- Actions (Export doesn't need admin password) -->
