@@ -3,6 +3,8 @@ import os
 import threading
 import logging
 import time
+# near other imports at top of file
+import requests
 import hashlib
 import json
 import math
@@ -2292,7 +2294,8 @@ def add_video():
         flash("Could not fetch stats (check API key/quota/video).", "danger")
         return redirect(url_for("home"))
 
-        conn = db()
+    # fixed: ensure conn is created regardless of above branch
+    conn = db()
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO video_list (video_id, name, is_tracking)
@@ -2315,6 +2318,7 @@ def add_video():
     safe_store(video_id, stats)
     flash(f"Now tracking: {title}", "success")
     return redirect(url_for("video_detail", video_id=video_id))
+
 
 @app.post("/add_target/<video_id>")
 @login_required
