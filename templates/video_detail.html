@@ -13,25 +13,29 @@
       --text-dark:#0a0a0a;
       --muted:#5b5b5b;
       --border:#e6e6e6;
-      --positive:#198754; /* bootstrap success */
-      --negative:#dc3545; /* bootstrap danger */
+      --positive:#198754;
+      --negative:#dc3545;
       --neutral:#6c757d;
       --primary:#0d6efd;
       --likes:#6f42c1;
       --engagement:#0dcaf0;
     }
+
+    /* Base */
     html,body{height:100%}
-    body{ background:#fff; color:var(--text-dark); font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; }
+    body{ background:#fff; color:var(--text-dark); font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
     .card{ background:#fff; border:1px solid var(--border); box-shadow: 0 1px 2px rgba(0,0,0,0.03); border-radius:10px; }
+    .small-note { font-size:.86rem; color:var(--muted); }
+
+    /* badges / gains */
     .gain-pos{ background:rgba(25,135,84,0.09); color:var(--positive); padding:.12rem .45rem; border-radius:.375rem; display:inline-block; font-weight:600;}
     .gain-neg{ background:rgba(220,53,69,0.08); color:var(--negative); padding:.12rem .45rem; border-radius:.375rem; display:inline-block; font-weight:600;}
     .gain-null{ color:var(--muted); }
-    .muted{ color:var(--muted); }
-    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", "Courier New", monospace; }
-    .target-card{ background:#f8f9fa; border:1px solid var(--border); border-radius:.5rem; padding:.5rem .75rem; margin-bottom:.5rem; }
-    .small-note { font-size:.86rem; color:var(--muted); }
 
-    /* Number colours */
+    /* mono */
+    .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", "Courier New", monospace; }
+
+    /* number colours */
     .num-views { color:var(--primary); font-weight:700; }
     .num-projected { color:#0b5ed7; font-weight:600; }
     .num-likes { color:var(--likes); font-weight:700; }
@@ -39,9 +43,9 @@
     .num-pct-pos { color:var(--positive); font-weight:700; }
     .num-pct-neg { color:var(--negative); font-weight:700; }
 
-    /* Thumbnail & header */
+    /* hero layout */
     .video-hero { max-width:1200px; margin:0 auto; display:flex; gap:1rem; align-items:flex-start; }
-    .thumb-wrap { flex:1 1 55%; }
+    .thumb-wrap { flex:1 1 55%; min-width:0; } /* min-width:0 to allow flex children to shrink */
     .video-thumb {
       width:100%;
       height:240px;
@@ -51,13 +55,10 @@
       display:block;
       border:1px solid var(--border);
     }
-    @media (min-width:768px) {
-      .video-thumb { height:320px; }
-    }
 
     .video-title { font-size:1.25rem; margin-top:.3rem; margin-bottom:0.25rem; line-height:1.2; font-weight:700; }
 
-    /* Live-badge */
+    /* live badge */
     .live-badge {
       display:inline-flex;
       gap:.6rem;
@@ -70,43 +71,87 @@
       font-size:.94rem;
       white-space:nowrap;
     }
-    .live-badge .dot {
-      width:9px; height:9px; border-radius:50%; background:#28a745;
-    }
+    .live-badge .dot { width:9px; height:9px; border-radius:50%; background:#28a745; }
     .live-sub { display:block; font-size:.85rem; color:var(--muted); margin-top:.12rem; }
 
-    /* Channel / actions */
+    /* actions */
     .action-row { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; margin-top:.8rem; }
     .action-row .btn { min-width:110px; flex:0 0 auto; }
     .action-row form { margin:0; display:flex; gap:.45rem; align-items:center; }
 
-    /* Page layout */
+    /* page layout */
     .content-wrap { max-width:1200px; margin:1rem auto; padding:0 0.5rem; }
-    .card-compact { border-radius:.5rem; border:1px solid var(--border); padding:.75rem; background:#fff; }
 
-    /* Date selector */
+    /* date selector */
     .date-row { display:flex; gap:.5rem; align-items:center; margin-bottom:.75rem; flex-wrap:wrap; }
     .date-row .btn { min-width:90px; }
     .date-select { min-width:200px; max-width:320px; }
 
-    /* Table responsive tweaks */
-    .table thead th { font-size:.9rem; border-bottom:1px solid var(--border); }
-    .table td, .table th { vertical-align:middle; font-size:.92rem; border-top:1px solid #fafafa; }
+    /* table */
+    .table thead th { font-size:.9rem; border-bottom:1px solid var(--border); white-space:nowrap; }
+    .table td, .table th { vertical-align:middle; font-size:.92rem; border-top:1px solid #fafafa; white-space:nowrap; }
+    .table-card { padding:.75rem; border-radius:.5rem; border:1px solid var(--border); background:linear-gradient(180deg,#ffffff,#fbfcff); }
 
-    /* Mobile: show only selected date's table to avoid long scrolling */
-    .day-block { display:none; }
-    .day-block.active { display:block; }
-
-    /* Stats panel */
-    .stats-panel { position:sticky; top:1rem; }
+    /* stats panel */
+    .stats-panel { position:sticky; top:1rem; align-self:flex-start; width:320px; }
     .stat-large { font-size:1.5rem; font-weight:800; }
     .stat-sub { font-size:.85rem; color:var(--muted); }
 
-    /* Compact table card for better readability */
-    .table-card { padding:.75rem; border-radius:.5rem; border:1px solid var(--border); background:linear-gradient(180deg,#ffffff,#fbfcff); }
+    .target-card{ background:#f8f9fa; border:1px solid var(--border); border-radius:.5rem; padding:.5rem .75rem; margin-bottom:.5rem; }
 
-    /* small improvements */
     .badge-soft { background:rgba(13,110,253,0.08); color:var(--primary); font-weight:600; padding:.3rem .5rem; border-radius:.375rem; }
+
+    /* thumbnail preview inside alert */
+    .thumb-preview { max-width:280px; border-radius:.375rem; border:1px solid var(--border); display:block; margin-top:.5rem; }
+
+    /* Hovers on table for desktop */
+    @media (hover:hover) {
+      .table tbody tr:hover { background: rgba(13,110,253,0.02); }
+    }
+
+    /* ---------------------------------------------------
+       Responsive tweaks (mobile-first)
+       --------------------------------------------------- */
+    @media (max-width: 991.98px) {
+      .stats-panel { position: static; width:100%; }
+      .video-hero { gap: .8rem; }
+    }
+
+    /* Stack layout on small screens */
+    @media (max-width: 767.98px) {
+      .video-hero { flex-direction:column; align-items:stretch; }
+      .video-thumb { height:200px; border-radius:.5rem; }
+      .thumb-wrap { order:0; }
+      .stats-panel { order:1; margin-top:0.6rem; }
+      .action-row .btn, .action-row input { min-width:unset; width:100%; }
+      .action-row { flex-direction:column; align-items:stretch; }
+
+      /* compact table font + touch targets */
+      .table thead th, .table td { font-size:.80rem; }
+      .table { font-size:.85rem; }
+
+      /* reduce number of visible columns to fit phone */
+      /* hide: Hourly Gain, 24h Gain, Projected, Compare diff */
+      .col-hide-sm { display:none !important; }
+
+      .thumb-preview { max-width:100%; }
+
+      /* make date select full width */
+      .date-select { min-width:120px; width:100%; }
+
+      /* increase spacing for forms on mobile */
+      form.d-flex.gap-2 { flex-direction:column; }
+    }
+
+    /* On small->medium screens hide some less-critical columns */
+    @media (min-width: 768px) and (max-width: 991.98px) {
+      .col-hide-md { display:none !important; }
+      .video-thumb { height:260px; }
+    }
+
+    /* allow table horizontal scroll when user wants to see hidden columns */
+    .table-responsive { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+
   </style>
 </head>
 <body>
@@ -176,14 +221,14 @@
       <div class="mt-3 action-row">
         <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('export_video', video_id=v.video_id) }}">Export</a>
 
-        <form method="POST" action="{{ url_for('stop_tracking', video_id=v.video_id) }}">
+        <form method="POST" action="{{ url_for('stop_tracking', video_id=v.video_id) }}" class="d-flex align-items-center">
           <input class="form-control form-control-sm" type="password" name="admin_secret" placeholder="Admin pwd" required style="max-width:130px;">
           <button class="btn btn-outline-warning btn-sm" type="submit">
             {% if v.is_tracking %}Pause{% else %}Resume{% endif %}
           </button>
         </form>
 
-        <form method="POST" action="{{ url_for('remove_video', video_id=v.video_id) }}" onsubmit="return confirm('Delete this video and ALL its data?')">
+        <form method="POST" action="{{ url_for('remove_video', video_id=v.video_id) }}" onsubmit="return confirm('Delete this video and ALL its data?')" class="d-flex align-items-center">
           <input class="form-control form-control-sm" type="password" name="admin_secret" placeholder="Admin pwd" required style="max-width:130px;">
           <button class="btn btn-outline-danger btn-sm" type="submit">Remove</button>
         </form>
@@ -286,7 +331,7 @@
           <div class="small-note">Provide a video link/ID and a comparison date (YYYY-MM-DD). The app will compute offset days automatically.</div>
         </div>
         <div class="d-flex gap-2">
-          <form method="POST" class="d-flex gap-2" action="{{ url_for('set_comparison', video_id=v.video_id) }}">
+          <form method="POST" class="d-flex gap-2 align-items-center" action="{{ url_for('set_comparison', video_id=v.video_id) }}">
             <input name="comparison_link" class="form-control form-control-sm" placeholder="Compare video (link or id)" style="min-width:220px;">
             <input name="comparison_date" type="date" class="form-control form-control-sm" placeholder="YYYY-MM-DD" style="width:150px;">
             <button class="btn btn-sm btn-primary" type="submit">Set</button>
@@ -385,11 +430,11 @@
                       <th>Time (IST)</th>
                       <th>Total Views</th>
                       <th>Gain (5 min)</th>
-                      <th>Hourly Gain</th>
-                      <th>24h Gain ⓘ</th>
-                      <th>Change 24h vs prev day (%)</th>
-                      <th>Projected (min) views</th>
-                      <th>Compare diff</th>
+                      <th class="d-none d-md-table-cell col-hide-sm">Hourly Gain</th>
+                      <th class="d-none d-md-table-cell col-hide-sm">24h Gain ⓘ</th>
+                      <th class="d-none d-sm-table-cell">Change 24h vs prev day (%)</th>
+                      <th class="d-none d-md-table-cell col-hide-sm">Projected (min) views</th>
+                      <th class="d-none d-md-table-cell col-hide-sm">Compare diff</th>
                       <th>Likes Δ</th>
                       <th>Engagement (%)</th>
                     </tr>
@@ -420,31 +465,31 @@
                           {% else %}<span class="gain-neg">{{ "{:,}".format(gain5) }}</span>{% endif %}
                         </td>
 
-                        <td>
+                        <td class="d-none d-md-table-cell col-hide-sm">
                           {% if hourly_gain is none %}<span class="gain-null">—</span>
                           {% elif hourly_gain >= 0 %}<span class="gain-pos">+{{ "{:,}".format(hourly_gain) }}</span>
                           {% else %}<span class="gain-neg">{{ "{:,}".format(hourly_gain) }}</span>{% endif %}
                         </td>
 
-                        <td>
+                        <td class="d-none d-md-table-cell col-hide-sm">
                           {% if gain24 is none %}<span class="gain-null">—</span>
                           {% elif gain24 >= 0 %}<span class="gain-pos">+{{ "{:,}".format(gain24) }}</span>
                           {% else %}<span class="gain-neg">{{ "{:,}".format(gain24) }}</span>{% endif %}
                         </td>
 
-                        <td>
+                        <td class="d-none d-sm-table-cell">
                           {% if pct24 is none %}<span class="gain-null">—</span>
                           {% elif pct24 > 0 %}<span class="num-pct-pos">+{{ ('{:.2f}'.format(pct24)) }}%</span>
                           {% elif pct24 < 0 %}<span class="num-pct-neg">{{ ('{:.2f}'.format(pct24)) }}%</span>
                           {% else %}<span>0.00%</span>{% endif %}
                         </td>
 
-                        <td>
+                        <td class="d-none d-md-table-cell col-hide-sm">
                           {% if projected is none %}<span class="gain-null">—</span>
                           {% else %}<span class="num-projected mono">{{ "{:,}".format(projected) }}</span>{% endif %}
                         </td>
 
-                        <td>
+                        <td class="d-none d-md-table-cell col-hide-sm">
                           {% if comp_diff is none %}<span class="gain-null">—</span>
                           {% elif comp_diff >= 0 %}<span class="gain-pos">+{{ "{:,}".format(comp_diff) }}</span>
                           {% else %}<span class="gain-neg">{{ "{:,}".format(comp_diff) }}</span>{% endif %}
@@ -465,6 +510,7 @@
                   </tbody>
                 </table>
               </div>
+              <div class="small-note mt-2">Tip: on phones some columns are hidden for readability. Rotate your device or open on a larger screen to see full table.</div>
             </div>
           </div>
         </div>
@@ -495,6 +541,10 @@
       const idx = dates.indexOf(date);
       if (prevBtn) prevBtn.disabled = (idx === dates.length - 1) || idx === -1;
       if (nextBtn) nextBtn.disabled = (idx <= 0);
+      // small UX: scroll active day into view on mobile
+      if (block && window.innerWidth < 768) {
+        setTimeout(()=> block.scrollIntoView({behavior:'smooth', block:'start'}), 60);
+      }
     }
 
     if (dateSelect && dateSelect.options.length) {
