@@ -21,21 +21,17 @@
       --engagement:#0dcaf0;
     }
 
-    /* Base */
     html,body{height:100%}
     body{ background:#fff; color:var(--text-dark); font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
     .card{ background:#fff; border:1px solid var(--border); box-shadow: 0 1px 2px rgba(0,0,0,0.03); border-radius:10px; }
     .small-note { font-size:.86rem; color:var(--muted); }
 
-    /* badges / gains */
     .gain-pos{ background:rgba(25,135,84,0.09); color:var(--positive); padding:.12rem .45rem; border-radius:.375rem; display:inline-block; font-weight:600;}
     .gain-neg{ background:rgba(220,53,69,0.08); color:var(--negative); padding:.12rem .45rem; border-radius:.375rem; display:inline-block; font-weight:600;}
     .gain-null{ color:var(--muted); }
 
-    /* mono */
     .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", "Courier New", monospace; }
 
-    /* number colours */
     .num-views { color:var(--primary); font-weight:700; }
     .num-projected { color:#0b5ed7; font-weight:600; }
     .num-likes { color:var(--likes); font-weight:700; }
@@ -43,9 +39,8 @@
     .num-pct-pos { color:var(--positive); font-weight:700; }
     .num-pct-neg { color:var(--negative); font-weight:700; }
 
-    /* hero layout */
     .video-hero { max-width:1200px; margin:0 auto; display:flex; gap:1rem; align-items:flex-start; }
-    .thumb-wrap { flex:1 1 55%; min-width:0; } /* min-width:0 to allow flex children to shrink */
+    .thumb-wrap { flex:1 1 55%; min-width:0; }
     .video-thumb {
       width:100%;
       height:240px;
@@ -58,7 +53,6 @@
 
     .video-title { font-size:1.25rem; margin-top:.3rem; margin-bottom:0.25rem; line-height:1.2; font-weight:700; }
 
-    /* live badge */
     .live-badge {
       display:inline-flex;
       gap:.6rem;
@@ -74,25 +68,20 @@
     .live-badge .dot { width:9px; height:9px; border-radius:50%; background:#28a745; }
     .live-sub { display:block; font-size:.85rem; color:var(--muted); margin-top:.12rem; }
 
-    /* actions */
     .action-row { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; margin-top:.8rem; }
     .action-row .btn { min-width:110px; flex:0 0 auto; }
     .action-row form { margin:0; display:flex; gap:.45rem; align-items:center; }
 
-    /* page layout */
     .content-wrap { max-width:1200px; margin:1rem auto; padding:0 0.5rem; }
 
-    /* date selector */
     .date-row { display:flex; gap:.5rem; align-items:center; margin-bottom:.75rem; flex-wrap:wrap; }
     .date-row .btn { min-width:90px; }
     .date-select { min-width:200px; max-width:320px; }
 
-    /* table */
     .table thead th { font-size:.9rem; border-bottom:1px solid var(--border); white-space:nowrap; }
     .table td, .table th { vertical-align:middle; font-size:.92rem; border-top:1px solid #fafafa; white-space:nowrap; }
     .table-card { padding:.75rem; border-radius:.5rem; border:1px solid var(--border); background:linear-gradient(180deg,#ffffff,#fbfcff); }
 
-    /* stats panel */
     .stats-panel { position:sticky; top:1rem; align-self:flex-start; width:320px; }
     .stat-large { font-size:1.5rem; font-weight:800; }
     .stat-sub { font-size:.85rem; color:var(--muted); }
@@ -101,13 +90,15 @@
 
     .badge-soft { background:rgba(13,110,253,0.08); color:var(--primary); font-weight:600; padding:.3rem .5rem; border-radius:.375rem; }
 
-    /* thumbnail preview inside alert */
     .thumb-preview { max-width:280px; border-radius:.375rem; border:1px solid var(--border); display:block; margin-top:.5rem; }
 
-    /* Hovers on table for desktop */
     @media (hover:hover) {
       .table tbody tr:hover { background: rgba(13,110,253,0.02); }
     }
+
+    /* default mobile hiding classes: use these to hide less-critical columns on very small screens */
+    .col-hide-sm { display:table-cell; }  /* visible by default; controlled by media queries */
+    .col-hide-md { display:table-cell; }
 
     /* ---------------------------------------------------
        Responsive tweaks (mobile-first)
@@ -117,7 +108,6 @@
       .video-hero { gap: .8rem; }
     }
 
-    /* Stack layout on small screens */
     @media (max-width: 767.98px) {
       .video-hero { flex-direction:column; align-items:stretch; }
       .video-thumb { height:200px; border-radius:.5rem; }
@@ -126,30 +116,31 @@
       .action-row .btn, .action-row input { min-width:unset; width:100%; }
       .action-row { flex-direction:column; align-items:stretch; }
 
-      /* compact table font + touch targets */
       .table thead th, .table td { font-size:.80rem; }
       .table { font-size:.85rem; }
 
-      /* reduce number of visible columns to fit phone */
-      /* hide: Hourly Gain, 24h Gain, Projected, Compare diff */
+      /* hide less-critical columns by default on small screens */
       .col-hide-sm { display:none !important; }
+      .col-hide-md { display:none !important; }
 
       .thumb-preview { max-width:100%; }
 
-      /* make date select full width */
       .date-select { min-width:120px; width:100%; }
 
-      /* increase spacing for forms on mobile */
       form.d-flex.gap-2 { flex-direction:column; }
     }
 
-    /* On small->medium screens hide some less-critical columns */
     @media (min-width: 768px) and (max-width: 991.98px) {
-      .col-hide-md { display:none !important; }
-      .video-thumb { height:260px; }
+      .col-hide-md { display:none !important; } /* hide some columns on narrow tablets */
     }
 
-    /* allow table horizontal scroll when user wants to see hidden columns */
+    /* When user toggles "show all columns", force show hidden columns */
+    body.show-all-columns .col-hide-sm,
+    body.show-all-columns .col-hide-md {
+      display:table-cell !important;
+    }
+
+    /* allow table horizontal scroll */
     .table-responsive { overflow-x:auto; -webkit-overflow-scrolling:touch; }
 
   </style>
@@ -193,7 +184,6 @@
           {% endif %}
         </div>
 
-        <!-- Thumbnail changed banner -->
         {% if v.thumbnail_changed %}
           <div class="alert alert-warning alert-dismissible fade show mt-3" role="alert">
             <div class="d-flex align-items-start justify-content-between gap-2">
@@ -330,7 +320,7 @@
           <strong>Compare with other video</strong>
           <div class="small-note">Provide a video link/ID and a comparison date (YYYY-MM-DD). The app will compute offset days automatically.</div>
         </div>
-        <div class="d-flex gap-2">
+        <div class="d-flex gap-2 align-items-center">
           <form method="POST" class="d-flex gap-2 align-items-center" action="{{ url_for('set_comparison', video_id=v.video_id) }}">
             <input name="comparison_link" class="form-control form-control-sm" placeholder="Compare video (link or id)" style="min-width:220px;">
             <input name="comparison_date" type="date" class="form-control form-control-sm" placeholder="YYYY-MM-DD" style="width:150px;">
@@ -401,7 +391,7 @@
       </form>
     </div>
 
-    <!-- Date selector row -->
+    <!-- Date selector row + column toggle -->
     <div class="mt-3 date-row align-items-center">
       <button id="prevDayBtn" class="btn btn-sm btn-outline-secondary" type="button" title="Previous day">◀ Prev</button>
 
@@ -413,10 +403,13 @@
 
       <button id="nextDayBtn" class="btn btn-sm btn-outline-secondary" type="button" title="Next day">Next ▶</button>
 
-      <div class="ms-auto small-note">Showing: <span id="showingDate"></span></div>
+      <div class="ms-auto d-flex gap-2 align-items-center">
+        <div class="small-note">Showing: <span id="showingDate"></span></div>
+        <button id="toggleColsBtn" class="btn btn-sm btn-outline-primary" type="button" aria-pressed="false" title="Show all columns">Show all columns</button>
+      </div>
     </div>
 
-    <!-- Data tables (each day wrapped in .day-block) -->
+    <!-- Data tables -->
     <div id="daysContainer">
       {% for d, rows in v.daily.items() %}
         <div class="day-block" data-date="{{ d }}">
@@ -430,17 +423,16 @@
                       <th>Time (IST)</th>
                       <th>Total Views</th>
                       <th>Gain (5 min)</th>
-                      <th class="d-none d-md-table-cell col-hide-sm">Hourly Gain</th>
-                      <th class="d-none d-md-table-cell col-hide-sm">24h Gain ⓘ</th>
-                      <th class="d-none d-sm-table-cell">Change 24h vs prev day (%)</th>
-                      <th class="d-none d-md-table-cell col-hide-sm">Projected (min) views</th>
-                      <th class="d-none d-md-table-cell col-hide-sm">Compare diff</th>
+                      <th class="col-hide-sm col-hide-md">Hourly Gain</th>
+                      <th class="col-hide-sm col-hide-md">24h Gain ⓘ</th>
+                      <th>Change 24h vs prev day (%)</th>
+                      <th class="col-hide-sm col-hide-md">Projected (min) views</th>
+                      <th class="col-hide-sm col-hide-md">Compare diff</th>
                       <th>Likes Δ</th>
                       <th>Engagement (%)</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {# rows may have variable length. Access by index with fallbacks so older shapes won't break #}
                     {% for row in rows %}
                       {% set ts = row[0] if row|length > 0 else None %}
                       {% set views = row[1] if row|length > 1 else None %}
@@ -465,31 +457,31 @@
                           {% else %}<span class="gain-neg">{{ "{:,}".format(gain5) }}</span>{% endif %}
                         </td>
 
-                        <td class="d-none d-md-table-cell col-hide-sm">
+                        <td class="col-hide-sm col-hide-md">
                           {% if hourly_gain is none %}<span class="gain-null">—</span>
                           {% elif hourly_gain >= 0 %}<span class="gain-pos">+{{ "{:,}".format(hourly_gain) }}</span>
                           {% else %}<span class="gain-neg">{{ "{:,}".format(hourly_gain) }}</span>{% endif %}
                         </td>
 
-                        <td class="d-none d-md-table-cell col-hide-sm">
+                        <td class="col-hide-sm col-hide-md">
                           {% if gain24 is none %}<span class="gain-null">—</span>
                           {% elif gain24 >= 0 %}<span class="gain-pos">+{{ "{:,}".format(gain24) }}</span>
                           {% else %}<span class="gain-neg">{{ "{:,}".format(gain24) }}</span>{% endif %}
                         </td>
 
-                        <td class="d-none d-sm-table-cell">
+                        <td>
                           {% if pct24 is none %}<span class="gain-null">—</span>
                           {% elif pct24 > 0 %}<span class="num-pct-pos">+{{ ('{:.2f}'.format(pct24)) }}%</span>
                           {% elif pct24 < 0 %}<span class="num-pct-neg">{{ ('{:.2f}'.format(pct24)) }}%</span>
                           {% else %}<span>0.00%</span>{% endif %}
                         </td>
 
-                        <td class="d-none d-md-table-cell col-hide-sm">
+                        <td class="col-hide-sm col-hide-md">
                           {% if projected is none %}<span class="gain-null">—</span>
                           {% else %}<span class="num-projected mono">{{ "{:,}".format(projected) }}</span>{% endif %}
                         </td>
 
-                        <td class="d-none d-md-table-cell col-hide-sm">
+                        <td class="col-hide-sm col-hide-md">
                           {% if comp_diff is none %}<span class="gain-null">—</span>
                           {% elif comp_diff >= 0 %}<span class="gain-pos">+{{ "{:,}".format(comp_diff) }}</span>
                           {% else %}<span class="gain-neg">{{ "{:,}".format(comp_diff) }}</span>{% endif %}
@@ -510,7 +502,7 @@
                   </tbody>
                 </table>
               </div>
-              <div class="small-note mt-2">Tip: on phones some columns are hidden for readability. Rotate your device or open on a larger screen to see full table.</div>
+              <div class="small-note mt-2">Tip: tap <strong>Show all columns</strong> to reveal hidden columns on smaller screens, or scroll horizontally to view full table.</div>
             </div>
           </div>
         </div>
@@ -541,7 +533,6 @@
       const idx = dates.indexOf(date);
       if (prevBtn) prevBtn.disabled = (idx === dates.length - 1) || idx === -1;
       if (nextBtn) nextBtn.disabled = (idx <= 0);
-      // small UX: scroll active day into view on mobile
       if (block && window.innerWidth < 768) {
         setTimeout(()=> block.scrollIntoView({behavior:'smooth', block:'start'}), 60);
       }
@@ -573,7 +564,7 @@
       dateSelect.addEventListener('blur', () => dateSelect.size = 1);
     }
 
-    /* Live badge updater: updates "Updated X ago • N views" every 10s */
+    /* Live badge updater */
     (function(){
       const liveBadge = document.getElementById('liveBadge');
       const liveText = document.getElementById('liveText');
@@ -597,6 +588,44 @@
       refresh();
       setInterval(refresh, 10 * 1000);
     })();
+
+    /* Column toggle: show all columns on small screens when user requests it.
+       Persist the preference in localStorage so it survives reloads. */
+    const toggleBtn = document.getElementById('toggleColsBtn');
+    const storageKey = 'video_view_show_all_columns';
+
+    function setShowAllColumns(enabled, save=true) {
+      if (enabled) {
+        document.body.classList.add('show-all-columns');
+        toggleBtn.textContent = 'Compact view';
+        toggleBtn.setAttribute('aria-pressed', 'true');
+      } else {
+        document.body.classList.remove('show-all-columns');
+        toggleBtn.textContent = 'Show all columns';
+        toggleBtn.setAttribute('aria-pressed', 'false');
+      }
+      if (save) {
+        try { localStorage.setItem(storageKey, enabled ? '1' : '0'); } catch (e) {}
+      }
+    }
+
+    // initialize from localStorage
+    try {
+      const v = localStorage.getItem(storageKey);
+      if (v === '1') setShowAllColumns(true, false);
+    } catch (e) {}
+
+    if (toggleBtn) {
+      toggleBtn.addEventListener('click', () => {
+        const isOn = document.body.classList.contains('show-all-columns');
+        setShowAllColumns(!isOn, true);
+      });
+    }
+
+    // small enhancement: if device is wide (desktop), show all columns by default for convenience
+    if (window.innerWidth >= 992 && !document.body.classList.contains('show-all-columns')) {
+      setShowAllColumns(true, false);
+    }
 
   })();
 </script>
