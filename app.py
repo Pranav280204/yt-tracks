@@ -1373,14 +1373,18 @@ def build_video_display(vid: str):
 
         # iterate dates newest-first
         dates_sorted = sorted(grouped.keys(), reverse=True)
-        for date_str in dates_sorted:
+                for date_str in dates_sorted:
             processed = grouped[date_str]
             prev_day = (datetime.fromisoformat(date_str).date() - timedelta(days=1)).isoformat()
             prev_map = date_time_map.get(prev_day, {})
 
             display_rows = []
+
+            # track previous likes for same-date samples so we can compute like-gain
+            prev_likes_for_date = None
+
             for tpl in processed:
-                # tpl now: ts_ist, views, gain5, hourly_gain, gain_24h, pct_unused, likes, comments
+                # tpl now: ts_ist, views, gain5, hourly_gain, gain_24h, pct24, likes, comments
                 (ts_ist, views, gain_5m, hourly_gain, gain_24h, pct24, likes_val, comments_val) = tpl
                 time_part = ts_ist.split(" ")[1]
 
@@ -1439,7 +1443,17 @@ def build_video_display(vid: str):
                             except Exception:
                                 five_min_ratio = None
 
-                # --- engagement rate computation ---
+                # ---------- compute likes gain (vs previous sample on same date) ----------
+                likes_gain = None
+                try:
+                    if likes_val is not None and prev_likes_for_date is not None:
+                        likes_gain = int(likes_val) - int(prev_likes_for_date)
+                except Exception:
+                    likes_gain = None
+                # update previous likes tracker for next iteration
+                prev_likes_for_date = likes_val
+
+                # --- engagement rate computation uses absolute likes/comments (not the gain) ---
                 engagement_rate = None
                 try:
                     if views and views != 0:
@@ -1449,9 +1463,14 @@ def build_video_display(vid: str):
                 except Exception:
                     engagement_rate = None
 
-                # Append canonical tuple now includes likes, comments, engagement_rate:
-                # (ts_ist, views, gain_5m, hourly_gain, gain_24h, pct24, projected, comp_diff, five_min_ratio, likes, comments, engagement_rate)
-                display_rows.append((ts_ist, views, gain_5m, hourly_gain, gain_24h, pct24, projected, comp_diff, five_min_ratio, likes_val, comments_val, engagement_rate))
+                # Append canonical tuple now includes likes_gain (instead of absolute likes)
+                # New canonical tuple:
+                # (ts_ist, views, gain_5m, hourly_gain, gain_24h, pct24, projected, comp_diff,
+                #  five_min_ratio, likes_gain, comments, engagement_rate)
+                display_rows.append((
+                    ts_ist, views, gain_5m, hourly_gain, gain_24h, pct24,
+                    projected, comp_diff, five_min_ratio, likes_gain, comments_val, engagement_rate
+                ))
 
             # newest-first for UI
             daily[date_str] = list(reversed(display_rows))
