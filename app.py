@@ -1264,17 +1264,18 @@ def start_background():
 # -----------------------------
 def build_video_display(vid: str):
     """
-    Optimized builder:
+    Build display data for a video:
      - fetches only recent rows (bounded window)
      - uses process_gains (bisect-based)
      - caches results for a short TTL
      - fetches comparison video rows only for the same window
      - also fetches a fixed reference video (REF_COMPARE_VIDEO_ID) to compute a per-row
        5-minute ratio against that reference video's 5-min gain.
+    Returns dict suitable for templates (same shape as earlier code).
     """
     nowu = now_utc()
 
-    # try cache
+    # try short in-memory cache
     with _video_display_cache_lock:
         ent = _video_display_cache.get(vid)
         if ent:
@@ -1301,18 +1302,17 @@ def build_video_display(vid: str):
         except Exception:
             compare_offset_days = None
 
-        # compute earliest timestamp to fetch
-        # +2 days margin to allow interpolation for 24h lookups
+        # compute earliest timestamp to fetch (+2 days margin for interpolation)
         start_utc = (nowu - timedelta(days=_MAX_DISPLAY_DAYS + 2))
 
-        # Fetch raw view rows in window (chronological) for main video
+        # fetch rows for main video in window (chronological)
         cur.execute(
             "SELECT ts_utc, views, likes, comments FROM views WHERE video_id=%s AND ts_utc >= %s ORDER BY ts_utc ASC",
             (vid, start_utc)
         )
         all_rows = cur.fetchall()
 
-        # If comparison configured, fetch comp rows in same window (so date alignments work)
+        # fetch comparison rows if configured (same window)
         comp_rows = None
         if compare_video_id:
             cur.execute(
@@ -1321,7 +1321,7 @@ def build_video_display(vid: str):
             )
             comp_rows = cur.fetchall()
 
-        # Fetch the fixed reference video rows (for 5-min ratio) within the same window.
+        # fetch reference video rows (for 5-min ratio)
         ref_rows = None
         try:
             cur.execute(
@@ -1332,7 +1332,7 @@ def build_video_display(vid: str):
         except Exception:
             ref_rows = None
 
-    # prepare outputs / defaults
+    # prepare outputs
     daily = {}
     latest_views = None
     latest_ts = None
@@ -1341,10 +1341,10 @@ def build_video_display(vid: str):
     compare_meta = None
 
     if all_rows:
-        # process gains efficiently for main video
+        # processed_all is chronological list of tuples from process_gains
         processed_all = process_gains(all_rows)
 
-        # build processed map for main video
+        # build grouped maps for main video
         grouped = {}
         date_time_map = {}
         for tpl in processed_all:
@@ -1353,7 +1353,7 @@ def build_video_display(vid: str):
             grouped.setdefault(date_str, []).append(tpl)
             date_time_map.setdefault(date_str, {})[time_part] = tpl
 
-        # process comp video if available
+        # processed comp rows into date/time map if available
         comp_date_map = {}
         if comp_rows:
             comp_processed = process_gains(comp_rows)
@@ -1362,7 +1362,7 @@ def build_video_display(vid: str):
                 c_date, c_time = c_ts.split(" ")
                 comp_date_map.setdefault(c_date, {})[c_time] = ctpl
 
-        # process reference video (for 5-min ratio)
+        # processed ref rows into date/time map if available
         ref_time_map = {}
         if ref_rows:
             ref_processed = process_gains(ref_rows)
@@ -1373,40 +1373,40 @@ def build_video_display(vid: str):
 
         # iterate dates newest-first
         dates_sorted = sorted(grouped.keys(), reverse=True)
-                for date_str in dates_sorted:
+        for date_str in dates_sorted:
             processed = grouped[date_str]
             prev_day = (datetime.fromisoformat(date_str).date() - timedelta(days=1)).isoformat()
             prev_map = date_time_map.get(prev_day, {})
 
             display_rows = []
 
-            # track previous likes for same-date samples so we can compute like-gain
+            # track previous likes for same-date chronological samples so we can compute likes gain
             prev_likes_for_date = None
 
             for tpl in processed:
-                # tpl now: ts_ist, views, gain5, hourly_gain, gain_24h, pct24, likes, comments
+                # tpl: (ts_ist, views, gain_5m, hourly_gain, gain_24h, hourly_pct_change, likes_val, comments_val)
                 (ts_ist, views, gain_5m, hourly_gain, gain_24h, pct24, likes_val, comments_val) = tpl
                 time_part = ts_ist.split(" ")[1]
 
                 # --- change 24h vs prev day (tolerant match) ---
                 prev_tpl = prev_map.get(time_part) or find_closest_tpl(prev_map, time_part, tolerance_seconds=10)
                 prev_gain24 = prev_tpl[4] if prev_tpl else None
-                pct24 = None
+                pct24_calc = None
                 if prev_gain24 not in (None, 0):
                     try:
-                        pct24 = round(((gain_24h or 0) - prev_gain24) / prev_gain24 * 100, 2)
+                        pct24_calc = round(((gain_24h or 0) - prev_gain24) / prev_gain24 * 100, 2)
                     except Exception:
-                        pct24 = None
+                        pct24_calc = None
 
                 # --- projected (based on yesterday ~22:30) ---
                 projected = None
                 ref_2230 = find_closest_prev(prev_map, "22:30:00", max_earlier_seconds=300)
-                if ref_2230 and pct24 not in (None,):
+                if ref_2230 and pct24_calc not in (None,):
                     base_views = ref_2230[1]
                     base_gain = ref_2230[4]
                     if base_views is not None and base_gain not in (None, 0):
                         try:
-                            projected = int(base_views + base_gain * (1 + pct24 / 100.0))
+                            projected = int(base_views + base_gain * (1 + pct24_calc / 100.0))
                         except Exception:
                             projected = None
 
@@ -1424,7 +1424,7 @@ def build_video_display(vid: str):
                         except Exception:
                             comp_diff = None
 
-                # --- NEW: 5-min ratio against REF_COMPARE_VIDEO_ID ---
+                # --- 5-min ratio against REF_COMPARE_VIDEO_ID ---
                 five_min_ratio = None
                 if ref_time_map:
                     ref_map_for_date = ref_time_map.get(date_str, {})
@@ -1464,17 +1464,17 @@ def build_video_display(vid: str):
                     engagement_rate = None
 
                 # Append canonical tuple now includes likes_gain (instead of absolute likes)
-                # New canonical tuple:
                 # (ts_ist, views, gain_5m, hourly_gain, gain_24h, pct24, projected, comp_diff,
-                #  five_min_ratio, likes_gain, comments, engagement_rate)
+                #  five_min_ratio, likes_gain, comments_val, engagement_rate)
                 display_rows.append((
-                    ts_ist, views, gain_5m, hourly_gain, gain_24h, pct24,
+                    ts_ist, views, gain_5m, hourly_gain, gain_24h, pct24_calc,
                     projected, comp_diff, five_min_ratio, likes_gain, comments_val, engagement_rate
                 ))
 
             # newest-first for UI
             daily[date_str] = list(reversed(display_rows))
 
+        # latest summary values
         latest_views = all_rows[-1]["views"]
         latest_ts = all_rows[-1]["ts_utc"]
         latest_ts_iso = latest_ts.isoformat() if latest_ts is not None else None
@@ -1562,6 +1562,7 @@ def build_video_display(vid: str):
         _video_display_cache[vid] = (result, time.time())
 
     return result
+
 # -----------------------------
 # Auth routes
 # -----------------------------
