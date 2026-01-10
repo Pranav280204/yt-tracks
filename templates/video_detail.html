@@ -82,7 +82,8 @@
     .table td, .table th { vertical-align:middle; font-size:.92rem; border-top:1px solid #fafafa; white-space:nowrap; }
     .table-card { padding:.75rem; border-radius:.5rem; border:1px solid var(--border); background:linear-gradient(180deg,#ffffff,#fbfcff); }
 
-    .stats-panel { position:sticky; top:1rem; align-self:flex-start; width:320px; }
+    /* make stats panel normal (not sticky or fixed-width) per request */
+    .stats-panel { position:static; width:100%; align-self:flex-start; }
     .stat-large { font-size:1.5rem; font-weight:800; }
     .stat-sub { font-size:.85rem; color:var(--muted); }
 
@@ -96,15 +97,8 @@
       .table tbody tr:hover { background: rgba(13,110,253,0.02); }
     }
 
-    /* default mobile hiding classes: use these to hide less-critical columns on very small screens */
-    .col-hide-sm { display:table-cell; }  /* visible by default; controlled by media queries */
-    .col-hide-md { display:table-cell; }
-
-    /* ---------------------------------------------------
-       Responsive tweaks (mobile-first)
-       --------------------------------------------------- */
+    /* Responsive tweaks (mobile-first) */
     @media (max-width: 991.98px) {
-      .stats-panel { position: static; width:100%; }
       .video-hero { gap: .8rem; }
     }
 
@@ -119,25 +113,11 @@
       .table thead th, .table td { font-size:.80rem; }
       .table { font-size:.85rem; }
 
-      /* hide less-critical columns by default on small screens */
-      .col-hide-sm { display:none !important; }
-      .col-hide-md { display:none !important; }
-
       .thumb-preview { max-width:100%; }
 
       .date-select { min-width:120px; width:100%; }
 
       form.d-flex.gap-2 { flex-direction:column; }
-    }
-
-    @media (min-width: 768px) and (max-width: 991.98px) {
-      .col-hide-md { display:none !important; } /* hide some columns on narrow tablets */
-    }
-
-    /* When user toggles "show all columns", force show hidden columns */
-    body.show-all-columns .col-hide-sm,
-    body.show-all-columns .col-hide-md {
-      display:table-cell !important;
     }
 
     /* allow table horizontal scroll */
@@ -225,7 +205,7 @@
       </div>
     </div>
 
-    <!-- Right-side stats panel -->
+    <!-- Right-side stats panel (now normal size; only latest views + updated time) -->
     <div class="stats-panel col-lg-4" style="flex:0 0 320px;">
       <div class="card p-3 mb-3">
         <div class="d-flex justify-content-between align-items-start">
@@ -243,45 +223,17 @@
 
         <hr class="my-2">
 
-        <div>
-          <div class="d-flex gap-2 align-items-center mb-2">
-            <div class="badge-soft">Channel</div>
-            <div class="small-note ms-auto">{{ v.channel_info.channel_id or "–" }}</div>
-          </div>
-          <div class="d-flex gap-2 align-items-center">
-            <div>
-              <div class="small-note">Channel total</div>
-              <div class="h5 mb-0">{{ "{:,}".format(v.channel_info.channel_total) if v.channel_info.channel_total is not none else "—" }}</div>
-            </div>
-            <div class="ms-auto text-end">
-              <div class="small-note">Since prev</div>
-              {% if v.channel_info.channel_gain_since_prev is not none %}
-                {% if v.channel_info.channel_gain_since_prev >= 0 %}
-                  <div class="gain-pos">+{{ "{:,}".format(v.channel_info.channel_gain_since_prev) }}</div>
-                {% else %}
-                  <div class="gain-neg">{{ "{:,}".format(v.channel_info.channel_gain_since_prev) }}</div>
-                {% endif %}
-              {% else %}
-                <div class="muted">—</div>
-              {% endif %}
-            </div>
-          </div>
-        </div>
-
-        <hr class="my-2">
-
         <div class="small-note mb-2">Quick actions</div>
         <div class="d-grid gap-2">
           <a class="btn btn-sm btn-outline-primary" href="{{ url_for('video_stats', video_id=v.video_id) }}">More stats</a>
-          <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('mrbeast_stats') }}">Channel snapshots</a>
+          <!-- Channel snapshots removed as requested -->
         </div>
       </div>
 
-      <!-- Targets compact card -->
+      <!-- Targets compact card (removed "Manage" link as requested) -->
       <div class="card p-3">
         <div class="d-flex justify-content-between align-items-center mb-2">
           <strong>Targets</strong>
-          <a href="#targets" class="small-note">Manage</a>
         </div>
         {% if v.targets|length == 0 %}
           <div class="muted small-note">No active targets</div>
@@ -342,7 +294,7 @@
       {% endif %}
     </div>
 
-    <!-- Targets -->
+    <!-- Targets (full list + add form) -->
     <div id="targets" class="mt-1 mb-3">
       <h6 class="mb-2">🎯 Targets</h6>
       {% if v.targets|length == 0 %}
@@ -391,7 +343,7 @@
       </form>
     </div>
 
-    <!-- Date selector row + column toggle -->
+    <!-- Date selector row -->
     <div class="mt-3 date-row align-items-center">
       <button id="prevDayBtn" class="btn btn-sm btn-outline-secondary" type="button" title="Previous day">◀ Prev</button>
 
@@ -403,13 +355,10 @@
 
       <button id="nextDayBtn" class="btn btn-sm btn-outline-secondary" type="button" title="Next day">Next ▶</button>
 
-      <div class="ms-auto d-flex gap-2 align-items-center">
-        <div class="small-note">Showing: <span id="showingDate"></span></div>
-        <button id="toggleColsBtn" class="btn btn-sm btn-outline-primary" type="button" aria-pressed="false" title="Show all columns">Show all columns</button>
-      </div>
+      <div class="ms-auto small-note">Showing: <span id="showingDate"></span></div>
     </div>
 
-    <!-- Data tables -->
+    <!-- Data tables (each day wrapped in .day-block) -->
     <div id="daysContainer">
       {% for d, rows in v.daily.items() %}
         <div class="day-block" data-date="{{ d }}">
@@ -423,16 +372,17 @@
                       <th>Time (IST)</th>
                       <th>Total Views</th>
                       <th>Gain (5 min)</th>
-                      <th class="col-hide-sm col-hide-md">Hourly Gain</th>
-                      <th class="col-hide-sm col-hide-md">24h Gain ⓘ</th>
+                      <th>Hourly Gain</th>
+                      <th>24h Gain ⓘ</th>
                       <th>Change 24h vs prev day (%)</th>
-                      <th class="col-hide-sm col-hide-md">Projected (min) views</th>
-                      <th class="col-hide-sm col-hide-md">Compare diff</th>
+                      <th>Projected (min) views</th>
+                      <th>Compare diff</th>
                       <th>Likes Δ</th>
                       <th>Engagement (%)</th>
                     </tr>
                   </thead>
                   <tbody>
+                    {# rows may have variable length. Access by index with fallbacks so older shapes won't break #}
                     {% for row in rows %}
                       {% set ts = row[0] if row|length > 0 else None %}
                       {% set views = row[1] if row|length > 1 else None %}
@@ -457,13 +407,13 @@
                           {% else %}<span class="gain-neg">{{ "{:,}".format(gain5) }}</span>{% endif %}
                         </td>
 
-                        <td class="col-hide-sm col-hide-md">
+                        <td>
                           {% if hourly_gain is none %}<span class="gain-null">—</span>
                           {% elif hourly_gain >= 0 %}<span class="gain-pos">+{{ "{:,}".format(hourly_gain) }}</span>
                           {% else %}<span class="gain-neg">{{ "{:,}".format(hourly_gain) }}</span>{% endif %}
                         </td>
 
-                        <td class="col-hide-sm col-hide-md">
+                        <td>
                           {% if gain24 is none %}<span class="gain-null">—</span>
                           {% elif gain24 >= 0 %}<span class="gain-pos">+{{ "{:,}".format(gain24) }}</span>
                           {% else %}<span class="gain-neg">{{ "{:,}".format(gain24) }}</span>{% endif %}
@@ -476,12 +426,12 @@
                           {% else %}<span>0.00%</span>{% endif %}
                         </td>
 
-                        <td class="col-hide-sm col-hide-md">
+                        <td>
                           {% if projected is none %}<span class="gain-null">—</span>
                           {% else %}<span class="num-projected mono">{{ "{:,}".format(projected) }}</span>{% endif %}
                         </td>
 
-                        <td class="col-hide-sm col-hide-md">
+                        <td>
                           {% if comp_diff is none %}<span class="gain-null">—</span>
                           {% elif comp_diff >= 0 %}<span class="gain-pos">+{{ "{:,}".format(comp_diff) }}</span>
                           {% else %}<span class="gain-neg">{{ "{:,}".format(comp_diff) }}</span>{% endif %}
@@ -502,7 +452,6 @@
                   </tbody>
                 </table>
               </div>
-              <div class="small-note mt-2">Tip: tap <strong>Show all columns</strong> to reveal hidden columns on smaller screens, or scroll horizontally to view full table.</div>
             </div>
           </div>
         </div>
@@ -588,44 +537,6 @@
       refresh();
       setInterval(refresh, 10 * 1000);
     })();
-
-    /* Column toggle: show all columns on small screens when user requests it.
-       Persist the preference in localStorage so it survives reloads. */
-    const toggleBtn = document.getElementById('toggleColsBtn');
-    const storageKey = 'video_view_show_all_columns';
-
-    function setShowAllColumns(enabled, save=true) {
-      if (enabled) {
-        document.body.classList.add('show-all-columns');
-        toggleBtn.textContent = 'Compact view';
-        toggleBtn.setAttribute('aria-pressed', 'true');
-      } else {
-        document.body.classList.remove('show-all-columns');
-        toggleBtn.textContent = 'Show all columns';
-        toggleBtn.setAttribute('aria-pressed', 'false');
-      }
-      if (save) {
-        try { localStorage.setItem(storageKey, enabled ? '1' : '0'); } catch (e) {}
-      }
-    }
-
-    // initialize from localStorage
-    try {
-      const v = localStorage.getItem(storageKey);
-      if (v === '1') setShowAllColumns(true, false);
-    } catch (e) {}
-
-    if (toggleBtn) {
-      toggleBtn.addEventListener('click', () => {
-        const isOn = document.body.classList.contains('show-all-columns');
-        setShowAllColumns(!isOn, true);
-      });
-    }
-
-    // small enhancement: if device is wide (desktop), show all columns by default for convenience
-    if (window.innerWidth >= 992 && !document.body.classList.contains('show-all-columns')) {
-      setShowAllColumns(true, false);
-    }
 
   })();
 </script>
