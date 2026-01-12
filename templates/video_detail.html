@@ -226,7 +226,6 @@
         <div class="small-note mb-2">Quick actions</div>
         <div class="d-grid gap-2">
           <a class="btn btn-sm btn-outline-primary" href="{{ url_for('video_stats', video_id=v.video_id) }}">More stats</a>
-          <!-- Channel snapshots removed as requested -->
         </div>
       </div>
 
@@ -536,6 +535,70 @@
       }
       refresh();
       setInterval(refresh, 10 * 1000);
+    })();
+
+    /* Auto-refresh logic:
+       - Global: fallback full reload every 5s
+       - On this page: partial JSON refresh every 5s that updates the live-badge and latest views in-place */
+    (function(){
+      const AUTO_MS = 5 * 1000;
+
+      // start a global full-reload timer
+      let fullReloadTimer = setInterval(() => {
+        // only reload when page is visible to avoid background reloads
+        if (document.visibilityState === 'visible') {
+          location.reload();
+        }
+      }, AUTO_MS);
+
+      const liveBadge = document.getElementById('liveBadge');
+      if (!liveBadge) return;
+
+      // If on video page (we have liveBadge) — stop full reload and do partial updates
+      clearInterval(fullReloadTimer);
+
+      const videoId = "{{ v.video_id }}";
+
+      async function refreshPartial(){
+        try {
+          const res = await fetch(`/video/${encodeURIComponent(videoId)}/json`, { credentials: 'same-origin' });
+          if (!res.ok) return;
+          const j = await res.json();
+
+          if (j.latest_ts_iso) liveBadge.dataset.latestIso = j.latest_ts_iso;
+          if (j.latest_views != null) liveBadge.dataset.views = String(j.latest_views);
+
+          // update badge text immediately
+          const liveText = document.getElementById('liveText');
+          if (liveText && j.latest_views != null) {
+            liveText.textContent = 'Updated just now • ' + Number(j.latest_views).toLocaleString() + ' views';
+          }
+
+          // update large stat(s)
+          const statEls = document.querySelectorAll('.stat-large.num-views, .num-views');
+          statEls.forEach(el => {
+            if (j.latest_views != null) el.textContent = Number(j.latest_views).toLocaleString();
+          });
+
+          // update IST timestamp line (if present)
+          const liveSub = document.getElementById('liveSub');
+          if (liveSub && j.latest_ts_ist) {
+            liveSub.textContent = 'IST: ' + j.latest_ts_ist;
+          }
+
+          // thumbnail change: update src (best-effort)
+          if (j.thumbnail_changed && j.thumbnail_url) {
+            const thumb = document.querySelector('.video-thumb');
+            if (thumb) thumb.src = j.thumbnail_url;
+          }
+        } catch (err) {
+          console.error("refreshPartial error:", err);
+        }
+      }
+
+      // initial partial refresh + scheduled updates
+      refreshPartial();
+      setInterval(refreshPartial, AUTO_MS);
     })();
 
   })();
