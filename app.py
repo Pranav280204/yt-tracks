@@ -20,7 +20,7 @@ from functools import wraps
 import pandas as pd
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    flash, send_file, session, g, make_response
+    flash, send_file, session, g, make_response, jsonify
 )
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -2295,6 +2295,26 @@ def video_detail(video_id):
     info["thumbnail_prev_url"] = info.get("thumbnail_prev_url")
 
     return render_template("video_detail.html", v=info)
+    
+@app.get("/video/<video_id>/json")
+@login_required
+def video_detail_json(video_id):
+    """
+    Return minimal JSON for the video used by the frontend to update live values.
+    """
+    info = build_video_display(video_id)
+    if info is None:
+        return jsonify({"error": "not found"}), 404
+
+    return jsonify({
+        "video_id": info["video_id"],
+        "latest_views": info.get("latest_views"),
+        "latest_ts_iso": info.get("latest_ts_iso"),
+        "latest_ts_ist": info.get("latest_ts_ist"),
+        "thumbnail_changed": bool(info.get("thumbnail_changed", False)),
+        "thumbnail_url": info.get("thumbnail")  # already resolved in video_detail view
+    })
+
 
 @app.post("/add_video")
 @login_required
