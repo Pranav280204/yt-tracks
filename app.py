@@ -535,9 +535,17 @@ _CHANNEL_ID_CACHE_TTL = 60.0  # seconds
 # in-memory short cache for built video display (to reduce repeated heavy work)
 _video_display_cache: Dict[str, Tuple[dict, float]] = {}
 _video_display_cache_lock = threading.Lock()
-_VIDEO_DISPLAY_CACHE_TTL = 15.0  # seconds; tune this
+_VIDEO_DISPLAY_CACHE_TTL = 0  # seconds; tune this
 # maximum number of days of samples to fetch for display (reduce to speed up)
 _MAX_DISPLAY_DAYS = 14
+def invalidate_video_cache(video_id: str):
+    """Remove a cached build_video_display result for a video_id (no-op if missing)."""
+    try:
+        with _video_display_cache_lock:
+            _video_display_cache.pop(video_id, None)
+    except Exception:
+        # be resilient to concurrency issues
+        log.exception("invalidate_video_cache error for %s", video_id)
 
 def fetch_channel_id_for_videos(video_ids: list[str]) -> dict:
     """
@@ -755,6 +763,10 @@ def safe_store(video_id: str, stats: dict):
             "INSERT INTO views (video_id, ts_utc, date_ist, views, likes, comments) VALUES (%s, %s, %s, %s, %s, %s)",
             (video_id, tsu, date_ist, int(stats.get("views", 0)), likes_val, comments_val)
         )
+
+    # Ensure any cached display for this video is invalidated so the UI will reload fresh data
+    invalidate_video_cache(video_id)
+
 
 
 def interpolate_at(rows: list[dict], target_ts: datetime, key="views") -> Optional[float]:
@@ -2301,10 +2313,17 @@ def video_detail(video_id):
 def video_detail_json(video_id):
     """
     Return minimal JSON for the video used by the frontend to update live values.
+    Always bypass the short in-memory UI cache so callers receive the freshest numbers.
     """
+    # force fresh build (bypass in-memory cache)
+    invalidate_video_cache(video_id)
+
     info = build_video_display(video_id)
     if info is None:
         return jsonify({"error": "not found"}), 404
+
+    # resolve thumbnail the same way video_detail route does
+    thumbnail = info.get("thumbnail_url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
 
     return jsonify({
         "video_id": info["video_id"],
@@ -2312,7 +2331,7 @@ def video_detail_json(video_id):
         "latest_ts_iso": info.get("latest_ts_iso"),
         "latest_ts_ist": info.get("latest_ts_ist"),
         "thumbnail_changed": bool(info.get("thumbnail_changed", False)),
-        "thumbnail_url": info.get("thumbnail")  # already resolved in video_detail view
+        "thumbnail_url": thumbnail
     })
 
 
