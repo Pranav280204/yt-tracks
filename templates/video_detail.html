@@ -145,7 +145,7 @@
   <div class="video-hero mb-3">
     <div class="thumb-wrap">
       <a href="https://www.youtube.com/watch?v={{ v.video_id }}" target="_blank" rel="noopener noreferrer">
-        <img class="video-thumb" src="{{ v.thumbnail }}" alt="thumbnail for {{ v.name }}">
+        <img class="video-thumb" id="mainThumb" src="{{ v.thumbnail }}" alt="thumbnail for {{ v.name }}">
       </a>
 
       <div class="mt-2">
@@ -163,33 +163,14 @@
             <div class="small-note">No samples yet.</div>
           {% endif %}
         </div>
-
-        {% if v.thumbnail_changed %}
-          <div class="alert alert-warning alert-dismissible fade show mt-3" role="alert">
-            <div class="d-flex align-items-start justify-content-between gap-2">
-              <div>
-                <strong>Thumbnail changed</strong>
-                {% if v.thumbnail_prev_url %}
-                  — <a href="{{ v.thumbnail_prev_url }}" target="_blank" rel="noopener noreferrer">previous thumbnail</a>
-                {% endif %}
-                {% if v.thumbnail_changed_at %}
-                  <div class="small muted mt-1">Detected: {{ v.thumbnail_changed_at }}</div>
-                {% endif %}
-              </div>
-              <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-            </div>
-            {% if v.thumbnail %}
-              <div class="mt-3">
-                <img src="{{ v.thumbnail }}" alt="new thumbnail" class="thumb-preview">
-              </div>
-            {% endif %}
-          </div>
-        {% endif %}
       </div>
 
       <!-- Actions -->
       <div class="mt-3 action-row">
         <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('export_video', video_id=v.video_id) }}">Export</a>
+
+        <!-- Manual Refresh button -->
+        <button id="manualRefreshBtn" class="btn btn-outline-primary btn-sm" type="button">Refresh</button>
 
         <form method="POST" action="{{ url_for('stop_tracking', video_id=v.video_id) }}" class="d-flex align-items-center">
           <input class="form-control form-control-sm" type="password" name="admin_secret" placeholder="Admin pwd" required style="max-width:130px;">
@@ -210,13 +191,13 @@
       <div class="card p-3 mb-3">
         <div class="d-flex justify-content-between align-items-start">
           <div>
-            <div class="stat-large num-views">{{ "{:,}".format(v.latest_views or 0) }}</div>
+            <div class="stat-large num-views" id="statViews">{{ "{:,}".format(v.latest_views or 0) }}</div>
             <div class="stat-sub">Latest total views</div>
           </div>
           <div class="text-end">
             {% if v.latest_ts_ist %}
               <div class="small-note">Updated</div>
-              <div class="mono">{{ v.latest_ts_ist }}</div>
+              <div class="mono" id="statUpdated">{{ v.latest_ts_ist }}</div>
             {% endif %}
           </div>
         </div>
@@ -229,7 +210,7 @@
         </div>
       </div>
 
-      <!-- Targets compact card (removed "Manage" link as requested) -->
+      <!-- Targets compact card -->
       <div class="card p-3">
         <div class="d-flex justify-content-between align-items-center mb-2">
           <strong>Targets</strong>
@@ -377,11 +358,13 @@
                       <th>Projected (min) views</th>
                       <th>Compare diff</th>
                       <th>Likes Δ</th>
+                      <th>Hourly Likes</th>
+                      <th>Likes Count</th>
                       <th>Engagement (%)</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {# rows may have variable length. Access by index with fallbacks so older shapes won't break #}
+                    {# rows have new shape: (..., five_min_ratio, likes_gain, hourly_likes, comments, engagement) #}
                     {% for row in rows %}
                       {% set ts = row[0] if row|length > 0 else None %}
                       {% set views = row[1] if row|length > 1 else None %}
@@ -391,8 +374,11 @@
                       {% set pct24 = row[5] if row|length > 5 else None %}
                       {% set projected = row[6] if row|length > 6 else None %}
                       {% set comp_diff = row[7] if row|length > 7 else None %}
-                      {% set likes = row[9] if row|length > 9 else None %}
-                      {% set engagement = row[11] if row|length > 11 else None %}
+                      {% set five_min_ratio = row[8] if row|length > 8 else None %}
+                      {% set likes_delta = row[9] if row|length > 9 else None %}
+                      {% set hourly_likes = row[10] if row|length > 10 else None %}
+                      {% set likes_count = row[11] if row|length > 11 else None %}
+                      {% set engagement = row[12] if row|length > 12 else None %}
                       <tr>
                         <td class="mono">{{ ts }}</td>
 
@@ -437,9 +423,20 @@
                         </td>
 
                         <td class="mono">
-                          {% if likes is none %}<span class="gain-null">—</span>
-                          {% elif likes >= 0 %}<span class="num-likes">+{{ "{:,}".format(likes) }}</span>
-                          {% else %}<span class="gain-neg">{{ "{:,}".format(likes) }}</span>{% endif %}
+                          {% if likes_delta is none %}<span class="gain-null">—</span>
+                          {% elif likes_delta >= 0 %}<span class="num-likes">+{{ "{:,}".format(likes_delta) }}</span>
+                          {% else %}<span class="gain-neg">{{ "{:,}".format(likes_delta) }}</span>{% endif %}
+                        </td>
+
+                        <td class="mono">
+                          {% if hourly_likes is none %}<span class="gain-null">—</span>
+                          {% elif hourly_likes >= 0 %}<span class="num-likes">+{{ "{:,}".format(hourly_likes) }}</span>
+                          {% else %}<span class="gain-neg">{{ "{:,}".format(hourly_likes) }}</span>{% endif %}
+                        </td>
+
+                        <td class="mono">
+                          {% if likes_count is none or likes_count == "" %}<span class="gain-null">—</span>
+                          {% else %}{{ "{:,}".format(likes_count) }}{% endif %}
                         </td>
 
                         <td>
@@ -550,8 +547,71 @@
       setInterval(refreshBadgeText, 10 * 1000);
     })();
 
-    /* NOTE: Auto-refresh (periodic polling of /video/<id>/json) has been intentionally removed.
-       If you want a manual refresh button, add a button and call fetch('/video/<id>/json') manually. */
+    /* Manual refresh button logic (one-shot fetch of /video/<id>/json) */
+    (function(){
+      const btn = document.getElementById('manualRefreshBtn');
+      if (!btn) return;
+      const videoId = "{{ v.video_id }}";
+
+      async function doRefresh() {
+        btn.disabled = true;
+        const origText = btn.textContent;
+        btn.textContent = 'Refreshing...';
+        try {
+          const res = await fetch(`/video/${encodeURIComponent(videoId)}/json`, { credentials: 'same-origin', cache: 'no-store' });
+          if (!res.ok) {
+            console.warn('Manual refresh failed:', res.status);
+            return;
+          }
+          const j = await res.json();
+
+          // update badge iso & views
+          const liveBadge = document.getElementById('liveBadge');
+          if (j.latest_ts_iso && liveBadge) {
+            liveBadge.dataset.latestIso = j.latest_ts_iso;
+          }
+          if (typeof j.latest_views === 'number' || j.latest_views) {
+            if (liveBadge) liveBadge.dataset.views = String(j.latest_views || 0);
+            // update stat elements
+            const statEls = document.querySelectorAll('.stat-large.num-views, .num-views');
+            statEls.forEach(el => {
+              const txt = Number(j.latest_views || 0).toLocaleString();
+              if (el.textContent !== txt) el.textContent = txt;
+            });
+            // update side stat updated time (IST)
+            const statUpdated = document.getElementById('statUpdated');
+            if (j.latest_ts_ist && statUpdated) statUpdated.textContent = j.latest_ts_ist;
+            // update liveSub line
+            const liveSub = document.getElementById('liveSub');
+            if (j.latest_ts_ist && liveSub) liveSub.textContent = 'IST: ' + j.latest_ts_ist;
+          }
+
+          // update thumbnail if server says changed (we removed thumbnail change ALERT from UI, but keep preview update)
+          if (j.thumbnail_changed && j.thumbnail_url) {
+            const thumb = document.getElementById('mainThumb');
+            if (thumb && thumb.src !== j.thumbnail_url) {
+              thumb.src = j.thumbnail_url;
+            }
+          }
+
+          // immediately refresh time-ago text
+          const liveTextEl = document.getElementById('liveText');
+          if (liveTextEl && j.latest_ts_iso) {
+            liveTextEl.textContent = 'Updated just now • ' + (j.latest_views ? Number(j.latest_views).toLocaleString() : '—') + ' views';
+          }
+
+        } catch (err) {
+          console.error('Manual refresh error', err);
+        } finally {
+          btn.disabled = false;
+          btn.textContent = origText;
+        }
+      }
+
+      btn.addEventListener('click', doRefresh);
+    })();
+
+    /* NOTE: All periodic auto-refresh / polling removed. Manual refresh only. */
 
   })();
 </script>
