@@ -39,10 +39,10 @@
     .num-pct-pos { color:var(--positive); font-weight:700; }
     .num-pct-neg { color:var(--negative); font-weight:700; }
 
-    /* Prediction coloring */
-    .prediction-pos { color: rgb(0, 128, 0); font-weight:700; }    /* green */
-    .prediction-neg { color: rgb(220, 53, 69); font-weight:700; }   /* red */
-    .prediction-neutral { color: var(--muted); }
+    /* Prediction color classes */
+    .pred-pos { color: var(--positive); font-weight:700; }
+    .pred-neg { color: var(--negative); font-weight:700; }
+    .pred-neutral { color: var(--neutral); }
 
     .video-hero { max-width:1200px; margin:0 auto; display:flex; gap:1rem; align-items:flex-start; }
     .thumb-wrap { flex:1 1 55%; min-width:0; }
@@ -173,6 +173,8 @@
       <!-- Actions -->
       <div class="mt-3 action-row">
         <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('export_video', video_id=v.video_id) }}">Export</a>
+
+        <!-- manual refresh removed per request -->
 
         <form method="POST" action="{{ url_for('stop_tracking', video_id=v.video_id) }}" class="d-flex align-items-center">
           <input class="form-control form-control-sm" type="password" name="admin_secret" placeholder="Admin pwd" required style="max-width:130px;">
@@ -364,11 +366,11 @@
                     </tr>
                   </thead>
                   <tbody>
-                    {# rows shape:
-                       0 ts,1 views,2 gain5,3 hourly_gain,4 gain24,5 pct24,
-                       6 projected,7 comp_diff,8 five_min_ratio,9 likes_delta,
-                       10 prediction (hourly_likes),11 comments,12 engagement
+                    {# rows new canonical shape:
+                       (ts_ist, views, gain_5m, hourly_gain, gain_24h, pct24, projected, comp_diff, five_min_ratio, likes_gain, hourly_likes, comments, engagement)
+                       We removed "Change 24h vs prev day (%)" and "Likes Count" columns from UI.
                     #}
+                    {% set _prev = namespace(val=None) %}
                     {% for row in rows %}
                       {% set ts = row[0] if row|length > 0 else None %}
                       {% set views = row[1] if row|length > 1 else None %}
@@ -378,8 +380,21 @@
                       {% set projected = row[6] if row|length > 6 else None %}
                       {% set comp_diff = row[7] if row|length > 7 else None %}
                       {% set likes_delta = row[9] if row|length > 9 else None %}
-                      {% set prediction_val = row[10] if row|length > 10 else None %}
+                      {% set prediction = row[10] if row|length > 10 else None %}
                       {% set engagement = row[12] if row|length > 12 else None %}
+
+                      {# decide class for prediction based on previous prediction value (newest-first order) #}
+                      {% set pred_class = "pred-neutral" %}
+                      {% if prediction is not none and _prev.val is not none %}
+                        {% if prediction > _prev.val %}
+                          {% set pred_class = "pred-pos" %}
+                        {% elif prediction < _prev.val %}
+                          {% set pred_class = "pred-neg" %}
+                        {% else %}
+                          {% set pred_class = "pred-neutral" %}
+                        {% endif %}
+                      {% endif %}
+
                       <tr>
                         <td class="mono">{{ ts }}</td>
 
@@ -422,10 +437,9 @@
                           {% else %}<span class="gain-neg">{{ "{:,}".format(likes_delta) }}</span>{% endif %}
                         </td>
 
-                        <td class="mono prediction-cell">
-                          {% if prediction_val is none %}<span class="prediction-neutral">—</span>
-                          {% elif prediction_val >= 0 %}<span class="prediction-pos">{{ "{:,}".format(prediction_val) }}</span>
-                          {% else %}<span class="prediction-neg">{{ "{:,}".format(prediction_val) }}</span>{% endif %}
+                        <td class="mono {{ pred_class }}">
+                          {% if prediction is none %}<span class="gain-null">—</span>
+                          {% else %}{{ "{:,}".format(prediction) }}{% endif %}
                         </td>
 
                         <td>
@@ -433,6 +447,9 @@
                           {% else %}<span class="num-eng">{{ ('{:.3f}'.format(engagement)) }}%</span>{% endif %}
                         </td>
                       </tr>
+
+                      {# set previous prediction for next iteration #}
+                      {% set _prev.val = prediction %}
                     {% endfor %}
                   </tbody>
                 </table>
@@ -529,65 +546,14 @@
         const iso = liveBadge.dataset.latestIso;
         const views = parseInt(liveBadge.dataset.views || '0', 10);
         const ago = timeAgoText(iso);
+        // If the latest timestamp is very recent, display "Updated just now" to avoid flicker
         liveText.textContent = 'Updated ' + ago + ' • ' + (Number.isFinite(views) ? views.toLocaleString() : '—') + ' views';
       }
       refreshBadgeText();
       setInterval(refreshBadgeText, 10 * 1000);
     })();
 
-    /* Prediction coloring:
-       For each table, walk rows top-to-bottom: compare current prediction cell value
-       with previous row's prediction value. If current > prev -> green, if current < prev -> red.
-       Missing / non-numeric -> neutral.
-    */
-    function parseIntSafe(s) {
-      if (s === null || s === undefined) return null;
-      const t = String(s).replace(/,/g, '').trim();
-      if (t === '') return null;
-      const n = Number(t);
-      return Number.isFinite(n) ? Math.trunc(n) : null;
-    }
-
-    function applyPredictionColors() {
-      const dayBlocks = Array.from(document.querySelectorAll('.day-block'));
-      dayBlocks.forEach(block => {
-        const rows = Array.from(block.querySelectorAll('tbody tr'));
-        let prev = null;
-        rows.forEach(row => {
-          const predCell = row.querySelector('.prediction-cell');
-          if (!predCell) { prev = null; return; }
-          const text = predCell.textContent || '';
-          const val = parseIntSafe(text);
-          const span = predCell.querySelector('span') || predCell;
-          span.classList.remove('prediction-pos', 'prediction-neg', 'prediction-neutral');
-
-          if (val === null) {
-            span.classList.add('prediction-neutral');
-            prev = null;
-            return;
-          }
-
-          if (prev === null) {
-            span.classList.add('prediction-neutral');
-          } else {
-            if (val > prev) {
-              span.classList.add('prediction-pos');
-            } else if (val < prev) {
-              span.classList.add('prediction-neg');
-            } else {
-              span.classList.add('prediction-neutral');
-            }
-          }
-          prev = val;
-        });
-      });
-    }
-
-    // run once on load
-    document.addEventListener('DOMContentLoaded', applyPredictionColors);
-    setTimeout(applyPredictionColors, 120);
-
-    /* NOTE: manual refresh feature removed — no polling, no manual refresh button. */
+    /* All auto-refresh/polling and manual refresh button removed per request. */
 
   })();
 </script>
