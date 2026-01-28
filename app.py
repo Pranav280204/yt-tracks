@@ -2377,111 +2377,14 @@ def video_detail(video_id):
     
 @app.get("/video/<video_id>/json")
 @login_required
+@app.get("/video/<video_id>/json")
+@login_required
 def video_detail_json(video_id):
     """
-    Return minimal JSON for the video used by the frontend to update live values.
-    Always bypass the short in-memory UI cache so callers receive the freshest numbers.
-    This enhanced version includes `latest_row` details and `hourly_like_gain`.
+    Live JSON endpoint disabled to stop front-end auto-refresh/polling.
     """
-    # force fresh build (bypass short in-memory cache)
-    invalidate_video_cache(video_id)
-
-    info = build_video_display(video_id)
-    if info is None:
-        return jsonify({"error": "not found"}), 404
-
-    # resolve thumbnail the same way video_detail route does
-    thumbnail = info.get("thumbnail_url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-
-    # Basic latest fields
-    latest_ts_iso = info.get("latest_ts_iso")
-    latest_ts_ist = info.get("latest_ts_ist")
-    latest_views = info.get("latest_views")
-    latest_ts_dt = info.get("latest_ts")  # this is a datetime (UTC) from build_video_display
-
-    latest_row_payload = None
-    # try to extract the latest row tuple from the per-day data (UI uses IST string to match)
-    if latest_ts_ist:
-        date_str = latest_ts_ist.split(" ")[0]
-        day_rows = info.get("daily", {}).get(date_str, [])
-        # day_rows are newest-first in UI; find tuple with exact ts match
-        for tpl in day_rows:
-            if tpl and tpl[0] == latest_ts_ist:
-                # map tuple positions to named fields (best-effort; tolerant to missing fields)
-                # expected canonical tuple from build_video_display:
-                # (ts_ist, views, gain5, hourly_gain, gain24, pct24, projected, comp_diff, five_min_ratio, likes_gain, comments, engagement_rate)
-                def safe_index(arr, idx):
-                    return arr[idx] if len(arr) > idx else None
-
-                latest_row_payload = {
-                    "ts_ist": safe_index(tpl, 0),
-                    "views": safe_index(tpl, 1),
-                    "gain_5m": safe_index(tpl, 2),
-                    "hourly_gain": safe_index(tpl, 3),
-                    "gain_24h": safe_index(tpl, 4),
-                    "pct24": safe_index(tpl, 5),
-                    "projected": safe_index(tpl, 6),
-                    "comp_diff": safe_index(tpl, 7),
-                    "five_min_ratio": safe_index(tpl, 8),
-                    "likes_delta": safe_index(tpl, 9),
-                    "comments": safe_index(tpl, 10),
-                    "engagement_rate": safe_index(tpl, 11)
-                }
-                break
-
-    # Compute hourly_like_gain (absolute likes now vs ~1 hour earlier) using DB/interpolation.
-    hourly_like_gain = None
-    try:
-        if latest_ts_dt:
-            # window to fetch recent rows (same as build_video_display uses)
-            fetch_start_utc = (now_utc() - timedelta(days=_MAX_DISPLAY_DAYS + 2))
-            conn = db()
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT ts_utc, likes FROM views WHERE video_id=%s AND ts_utc >= %s ORDER BY ts_utc ASC",
-                    (video_id, fetch_start_utc)
-                )
-                rows = cur.fetchall()
-
-            # convert to list for interpolate_at (it expects dicts with ts_utc and the numeric key we want)
-            rows_asc = []
-            latest_likes_abs = None
-            for rr in rows:
-                likes_val = rr.get("likes")
-                rows_asc.append({"ts_utc": rr["ts_utc"], "likes": (int(likes_val) if likes_val is not None else None)})
-                # capture latest row's absolute likes by matching timestamp
-                if rr["ts_utc"] == latest_ts_dt:
-                    latest_likes_abs = rr.get("likes") if rr.get("likes") is not None else None
-                    if latest_likes_abs is not None:
-                        latest_likes_abs = int(latest_likes_abs)
-
-            if latest_likes_abs is not None:
-                # target is 1 hour before latest timestamp
-                target_ts = latest_ts_dt - timedelta(hours=1)
-                prev_likes_interp = interpolate_at(rows_asc, target_ts, key="likes")
-                if prev_likes_interp is not None:
-                    try:
-                        prev_likes_int = int(round(prev_likes_interp))
-                        hourly_like_gain = latest_likes_abs - prev_likes_int
-                    except Exception:
-                        hourly_like_gain = None
-    except Exception as e:
-        log.exception("Error computing hourly_like_gain for %s: %s", video_id, e)
-        hourly_like_gain = None
-
-    payload = {
-        "video_id": info["video_id"],
-        "latest_views": latest_views,
-        "latest_ts_iso": latest_ts_iso,
-        "latest_ts_ist": latest_ts_ist,
-        "thumbnail_changed": bool(info.get("thumbnail_changed", False)),
-        "thumbnail_url": thumbnail,
-        # latest_row contains several per-row metrics (if available)
-        "latest_row": latest_row_payload,
-        "hourly_like_gain": hourly_like_gain
-    }
-
-    return jsonify(payload)
+    # Return a non-success status so client polling stops (410 Gone).
+    return jsonify({"error": "live refresh disabled on server"}), 410
 
 
 @app.post("/add_video")
