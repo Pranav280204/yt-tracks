@@ -91,13 +91,7 @@
       <div class="mt-3 action-row">
         <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('export_video', video_id=v.video_id) }}">Export</a>
 
-        <!-- Poll interval selector -->
-        <select id="pollIntervalSelect" class="form-select form-select-sm" style="max-width:130px;">
-          <option value="1000">1s</option>
-          <option value="3000">3s</option>
-          <option value="5000" selected>5s (default)</option>
-          <option value="10000">10s</option>
-        </select>
+    
 
         <!-- Manual refresh button w/ spinner -->
         <button id="manualRefreshBtn" class="btn btn-outline-info btn-sm" type="button" title="Refresh now">
@@ -367,19 +361,17 @@
         liveText.textContent = 'Updated ' + ago + ' • ' + (Number.isFinite(views) ? views.toLocaleString() : '—') + ' views';
       }
       refreshBadgeText();
+      // keep the local "time ago" updater (does not call server)
       setInterval(refreshBadgeText, 10 * 1000);
     })();
 
-    /* --------- Polling + manual refresh logic with spinner + configurable interval --------- */
+    /* --------- Manual refresh logic with spinner (NO auto-polling) --------- */
     const videoId = "{{ v.video_id }}";
     const manualBtn = document.getElementById('manualRefreshBtn');
     const manualSpinner = document.getElementById('manualSpinner');
     const manualText = document.getElementById('manualText');
-    const pollSelect = document.getElementById('pollIntervalSelect');
 
     let controller = null;
-    let pollIntervalId = null;
-    let currentInterval = parseInt(pollSelect.value || '5000', 10);
 
     // format helpers
     function formatNum(n) { return (n === null || n === undefined || n === "") ? "—" : Number(n).toLocaleString(); }
@@ -395,8 +387,6 @@
       const row = document.querySelector(selector);
       if (!row) return;
       const tds = row.querySelectorAll('td');
-      // columns expected:
-      // 0: time, 1: views, 2: gain5, 3: hourly_gain, 4: gain24, 5: projected, 6: comp_diff, 7: likes_delta, 8: prediction, 9: engagement
       if (tds.length < 10) return;
 
       // Views
@@ -444,18 +434,14 @@
           ? `<span class="num-views">+${Number(latest_row.likes_delta).toLocaleString()}</span>`
           : `<span class="gain-neg">${Number(latest_row.likes_delta).toLocaleString()}</span>`;
       } else if (hourly_like_gain != null) {
-        // fallback: present hourly_like_gain returned by server
         tds[7].innerHTML = (hourly_like_gain >= 0)
           ? `<span class="num-views">+${Number(hourly_like_gain).toLocaleString()}</span>`
           : `<span class="gain-neg">${Number(hourly_like_gain).toLocaleString()}</span>`;
       }
 
-      // prediction (we show numeric value if provided; color logic applied by server/client using classes)
+      // prediction
       if (latest_row.prediction != null) {
-        // decide color using recent DOM context: compare to previous sibling row's prediction cell if present
-        // but server does not provide trend direction here — keep neutral class if not provided
         tds[8].textContent = Number(latest_row.prediction).toLocaleString();
-        // set color class (server could also include 'prediction_trend' if you prefer)
       }
 
       // engagement
@@ -467,7 +453,6 @@
     }
 
     async function refreshPartial(showSpinner=false) {
-      // show spinner if manual
       if (showSpinner) {
         manualSpinner.classList.remove('visually-hidden');
         manualBtn.disabled = true;
@@ -484,7 +469,10 @@
           headers: { 'Accept': 'application/json' },
           signal: controller.signal,
         });
-        if (!res.ok) return;
+        if (!res.ok) {
+          // If server has disabled the endpoint, it may return 410 — we intentionally do not auto-retry.
+          return;
+        }
         const j = await res.json();
 
         // update main panel & live badge
@@ -532,7 +520,6 @@
           console.error("refreshPartial error:", err);
         }
       } finally {
-        // hide spinner if manual
         if (showSpinner) {
           setTimeout(()=> {
             manualSpinner.classList.add('visually-hidden');
@@ -543,26 +530,7 @@
       }
     }
 
-    function startPolling(intervalMs) {
-      if (pollIntervalId) clearInterval(pollIntervalId);
-      // immediate fetch
-      if (document.visibilityState === 'visible') refreshPartial(false);
-      pollIntervalId = setInterval(() => {
-        if (document.visibilityState === 'visible') refreshPartial(false);
-      }, intervalMs);
-    }
-
-    // init polling
-    startPolling(currentInterval);
-
-    // handle poll interval changes
-    pollSelect.addEventListener('change', (e) => {
-      const val = parseInt(e.target.value || '5000', 10);
-      currentInterval = val;
-      startPolling(currentInterval);
-    });
-
-    // manual refresh button
+    // Manual refresh button
     manualBtn.addEventListener('click', async () => {
       manualBtn.disabled = true;
       try {
@@ -570,24 +538,20 @@
       } catch (e) {
         console.error("Manual refresh failed:", e);
       } finally {
-        // re-enable handled in refreshPartial finally
+        // spinner & re-enable handled in refreshPartial finally block
       }
     });
 
-    // visibility handling
+    // Keep abort-on-hidden behavior (improves UX if user navigates away while manual refresh running)
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') {
         if (controller) try { controller.abort(); } catch(e) {}
-      } else {
-        // immediate refresh when coming back
-        refreshPartial(false);
       }
     });
 
-    // cleanup
+    // cleanup on unload
     window.addEventListener('beforeunload', () => {
       if (controller) try { controller.abort(); } catch(e) {}
-      if (pollIntervalId) clearInterval(pollIntervalId);
     });
 
   })();
