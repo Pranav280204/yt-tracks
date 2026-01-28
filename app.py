@@ -2377,8 +2377,6 @@ def video_detail(video_id):
     
 @app.get("/video/<video_id>/json")
 @login_required
-@app.get("/video/<video_id>/json")
-@login_required
 def video_detail_json(video_id):
     """
     Live JSON endpoint disabled to stop front-end auto-refresh/polling.
