@@ -550,7 +550,7 @@
       return days + 'd ago';
     }
 
-    /* Initialize live-badge updater (refresh time text every 10s) */
+    /* Initialize live-badge updater (one-time render only; no periodic refresh) */
     (function(){
       const liveBadge = document.getElementById('liveBadge');
       const liveText = document.getElementById('liveText');
@@ -563,7 +563,7 @@
         liveText.textContent = 'Updated ' + ago + ' • ' + (Number.isFinite(views) ? views.toLocaleString() : '—') + ' views';
       }
       refreshBadgeText();
-      setInterval(refreshBadgeText, 10 * 1000);
+      // NOTE: removed periodic refresh to prevent the page from auto-updating new rows.
     })();
 
     /* Prediction coloring:
@@ -618,8 +618,7 @@
     document.addEventListener('DOMContentLoaded', applyPredictionColors);
     setTimeout(applyPredictionColors, 120);
 
-    /* NOTE: manual refresh feature removed — no polling, no manual refresh button. */
-    /* All auto-refresh/polling and manual refresh button removed per request. */
+    /* NOTE: manual refresh feature removed. */
 
   })();
 </script>
