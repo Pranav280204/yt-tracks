@@ -7,8 +7,9 @@
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
     :root{ --accent-blue:#e9f3ff; --accent-green:#e9f9f0; --accent-red:#ffecec; --text-dark:#0a0a0a; --muted:#5b5b5b; --border:#e6e6e6; --positive:#198754; --negative:#dc3545; --neutral:#6c757d; --primary:#0d6efd; --engagement:#0dcaf0; }
-    html,body{height:100%} body{ background:#fff; color:var(--text-dark); font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; margin:0; padding:0; }
-    html,body{height:100%} body{ background:#fff; color:var(--text-dark); font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
+    html,body{height:100%}
+    body{ background:#fff; color:var(--text-dark); font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; margin:0; padding:0; }
+
     .card{ background:#fff; border:1px solid var(--border); box-shadow: 0 1px 2px rgba(0,0,0,0.03); border-radius:10px; }
     .small-note { font-size:.86rem; color:var(--muted); }
     .gain-pos{ background:rgba(25,135,84,0.09); color:var(--positive); padding:.12rem .45rem; border-radius:.375rem; display:inline-block; font-weight:600;}
@@ -21,9 +22,9 @@
     .pred-pos { color: var(--positive); font-weight:700; }
     .pred-neg { color: var(--negative); font-weight:700; }
     .pred-neutral { color: var(--neutral); }
+
+    /* layout */
     .video-hero { max-width:1200px; margin:0 auto; display:flex; gap:1rem; align-items:flex-start; flex-wrap:wrap; padding:0 0.5rem; }
-    .thumb-wrap { flex: 1 1 60%; min-width:0; }
-    .video-hero { max-width:1200px; margin:0 auto; display:flex; gap:1rem; align-items:flex-start; }
     .thumb-wrap { flex:1 1 55%; min-width:0; }
     .video-thumb { width:100%; height:240px; object-fit:cover; border-radius:.5rem; background:#f2f2f2; display:block; border:1px solid var(--border); }
     .video-title { font-size:1.25rem; margin-top:.3rem; margin-bottom:0.25rem; line-height:1.2; font-weight:700; }
@@ -32,38 +33,56 @@
     .live-sub { display:block; font-size:.85rem; color:var(--muted); margin-top:.12rem; }
     .action-row { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; margin-top:.8rem; }
     .action-row .btn { min-width:110px; flex:0 0 auto; }
-    .action-row form { margin:0; display:flex; gap:.35rem; align-items:center; }
     .action-row form { margin:0; display:flex; gap:.45rem; align-items:center; }
+
     .content-wrap { max-width:1200px; margin:1rem auto; padding:0 0.5rem; }
     .date-row { display:flex; gap:.5rem; align-items:center; margin-bottom:.75rem; flex-wrap:wrap; }
     .table thead th { font-size:.9rem; border-bottom:1px solid var(--border); white-space:nowrap; }
     .table td, .table th { vertical-align:middle; font-size:.92rem; border-top:1px solid #fafafa; white-space:nowrap; }
     .table-card { padding:.75rem; border-radius:.5rem; border:1px solid var(--border); background:linear-gradient(180deg,#ffffff,#fbfcff); }
-    .stats-panel { position:static; width:100%; align-self:flex-start; flex: 1 1 100%; max-width:100%; }
+
     .stats-panel { position:static; width:100%; align-self:flex-start; }
     .stat-large { font-size:1.5rem; font-weight:800; }
     .stat-sub { font-size:.85rem; color:var(--muted); }
-    .target-card{ background:#f8f9fa; border:1px solid var(--border); border-radius:.5rem; padding:.5rem .75rem; margin-bottom:.5rem; }
-    .thumb-preview { max-width:280px; border-radius:.375rem; border:1px solid var(--border); display:block; margin-top:.5rem; }
+
+    /* Targets list styling (big cards like screenshot) */
+    .targets-list .target-row { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:1rem; border-radius:.5rem; background:#fafbfc; border:1px solid var(--border); }
+    .target-left { flex:1 1 60%; }
+    .target-right { text-align:right; min-width:200px; }
+    .target-goal { font-weight:800; font-size:1.25rem; }
+    .target-meta { color:var(--muted); font-size:.9rem; }
+    .target-stats { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace; }
+    .target-remove { margin-top:.5rem; }
+
+    /* Add-target inline form (compact) */
+    .add-target-row { display:flex; gap:.5rem; align-items:center; margin-top:.5rem; flex-wrap:wrap; }
+    .add-target-row input, .add-target-row button { height:38px; }
+
     @media (min-width: 992px) {
       .stats-panel { flex: 0 0 320px; max-width: 320px; }
       .thumb-wrap { flex: 1 1 55%; }
     }
-    @media (hover:hover) { .table tbody tr:hover { background: rgba(13,110,253,0.02); } }
-    @media (max-width: 520px) {
-      .action-row { gap: .5rem; flex-direction: column; align-items: stretch; }
-      .action-row .form-control { max-width: 100% !important; width: 100% !important; }
-      .action-row .btn { width: 100%; }
+
+    /* mobile tweaks */
+    @media (max-width: 767.98px) {
+      .video-hero { flex-direction:column; }
+      .action-row { gap:.5rem; flex-direction:column; align-items:stretch; }
+      .action-row .form-control, .action-row .btn { width:100%; }
+      .target-right { min-width:120px; text-align:left; margin-top:.5rem; }
+      .targets-list .target-row { flex-direction:column; align-items:flex-start; }
+      .add-target-row { flex-direction:column; align-items:stretch; }
+      .add-target-row input, .add-target-row button { width:100%; }
       .video-thumb { height:200px; }
     }
-    @media (max-width: 767.98px) { .video-thumb { height:200px; } .date-select { width:100%; } }
+
+    @media (hover:hover) { .table tbody tr:hover { background: rgba(13,110,253,0.02); } }
     .table-responsive { overflow-x:auto; -webkit-overflow-scrolling:touch; }
   </style>
 </head>
 <body>
 <div class="container py-3">
+  <!-- Top nav -->
   <div class="d-flex justify-content-between align-items-center mb-2" style="padding:0 .5rem;">
-  <div class="d-flex justify-content-between align-items-center mb-2">
     <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('home') }}">← Back</a>
     <div class="d-flex align-items-center gap-2">
       {% if current_user %}
@@ -99,24 +118,13 @@
         </div>
       </div>
 
-      <!-- Actions: Export + target form + admin controls -->
-      <!-- Actions: Export + Pause/Resume + Remove (manual refresh removed) -->
+      <!-- Actions: Export + Pause/Resume + Remove (removed small inline target form) -->
       <div class="mt-3 action-row">
         <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('export_video', video_id=v.video_id) }}">Export</a>
 
-        <!-- Target-setting form -->
-        <form method="POST" action="{{ url_for('add_target', video_id=v.video_id) }}" class="d-flex align-items-center" style="gap:.35rem;">
-          <input name="target_views" type="number" min="1" class="form-control form-control-sm" placeholder="Target views" style="max-width:130px;" required>
-          <input name="target_ts" type="datetime-local" class="form-control form-control-sm" style="max-width:210px;" required>
-          <input name="note" type="text" class="form-control form-control-sm" placeholder="Note (optional)" style="max-width:160px;">
-          <button type="submit" class="btn btn-sm btn-outline-success">Set Target</button>
-        </form>
-
         <form method="POST" action="{{ url_for('stop_tracking', video_id=v.video_id) }}" class="d-flex align-items-center">
           <input class="form-control form-control-sm" type="password" name="admin_secret" placeholder="Admin pwd" required style="max-width:130px;">
-          <button class="btn btn-outline-warning btn-sm" type="submit">
-            {% if v.is_tracking %}Pause{% else %}Resume{% endif %}
-          </button>
+          <button class="btn btn-outline-warning btn-sm" type="submit">{% if v.is_tracking %}Pause{% else %}Resume{% endif %}</button>
         </form>
 
         <form method="POST" action="{{ url_for('remove_video', video_id=v.video_id) }}" onsubmit="return confirm('Delete this video and ALL its data?')" class="d-flex align-items-center">
@@ -128,7 +136,6 @@
 
     <!-- Right-side stats panel -->
     <div class="stats-panel col-lg-4" style="padding:0 .5rem;">
-    <div class="stats-panel col-lg-4" style="flex:0 0 320px;">
       <div class="card p-3 mb-3">
         <div class="d-flex justify-content-between align-items-start">
           <div>
@@ -150,7 +157,7 @@
         </div>
       </div>
 
-      <!-- Targets compact card -->
+      <!-- Targets compact card (summary) -->
       <div class="card p-3">
         <div class="d-flex justify-content-between align-items-center mb-2">
           <strong>Targets</strong>
@@ -158,28 +165,40 @@
         {% if v.targets|length == 0 %}
           <div class="muted small-note">No active targets</div>
         {% else %}
-          {% for t in v.targets[:3] %}
-            <div class="mb-2">
-              <div class="d-flex justify-content-between align-items-center">
-                <div>
-                  <div class="small-note">Goal</div>
-                  <div class="fw-bold">{{ "{:,}".format(t.target_views) }}</div>
+          <div class="targets-list">
+            {% for t in v.targets %}
+              <div class="target-row mb-3">
+                <div class="target-left">
+                  <div class="target-goal">{{ "{:,}".format(t.target_views) }}</div>
+                  <div class="target-meta">by {{ t.target_ts_ist }}</div>
+                  {% if t.note %}<div class="small-note mt-1">{{ t.note }}</div>{% endif %}
                 </div>
-                <div class="text-end">
+                <div class="target-right">
                   {% if t.status == 'reached' %}
                     <div class="badge bg-success">Reached</div>
                   {% elif t.status == 'overdue' %}
                     <div class="badge bg-danger">Overdue</div>
                   {% else %}
-                    <div class="small-note">Remaining</div>
-                    <div class="mono">{{ "{:,}".format(t.remaining_views) }}</div>
+                    <div class="small-note">Remaining: <strong>{{ "{:,}".format(t.remaining_views) }}</strong></div>
+                    <div class="target-stats">Req/hr: {{ "{:,}".format(t.required_per_hour) }} • 5min: {{ "{:,}".format(t.required_per_5min) }}</div>
                   {% endif %}
+                  <div class="target-remove">
+                    <a class="btn btn-sm btn-outline-danger" href="{{ url_for('remove_target', target_id=t.id) }}" onclick="return confirm('Remove this target?')">Remove</a>
+                  </div>
                 </div>
               </div>
-              <div class="small-note mt-1">{{ t.target_ts_ist }}</div>
-            </div>
-          {% endfor %}
+            {% endfor %}
+          </div>
         {% endif %}
+
+        <!-- Add Target (compact & mobile-friendly) -->
+        <form class="add-target-row pt-2" method="POST" action="{{ url_for('add_target', video_id=v.video_id) }}">
+          <input name="target_views" class="form-control form-control-sm" placeholder="Target views" type="number" min="1" required style="max-width:220px;">
+          <input name="target_ts" class="form-control form-control-sm" type="datetime-local" required style="max-width:260px;">
+          <input name="note" class="form-control form-control-sm" placeholder="Optional note" maxlength="200" style="flex:1 1 200px; min-width:120px;">
+          <button class="btn btn-primary btn-sm" type="submit">Add</button>
+        </form>
+
       </div>
     </div>
   </div>
@@ -189,7 +208,7 @@
     <div class="mt-3 date-row align-items-center">
       <button id="prevDayBtn" class="btn btn-sm btn-outline-secondary" type="button" title="Previous day">◀ Prev</button>
 
-      <select id="dateSelect" class="form-select form-select-sm date-select" aria-label="Select date">
+      <select id="dateSelect" class="form-select form-select-sm date-select" aria-label="Select date" style="min-width:160px;">
         {% for d in v.daily.keys() %}
           <option value="{{ d }}">{{ d }}</option>
         {% endfor %}
@@ -347,9 +366,6 @@
     document.addEventListener('keydown', (e) => { if (e.key === 'ArrowLeft') prevBtn && prevBtn.click(); if (e.key === 'ArrowRight') nextBtn && nextBtn.click(); });
 
     /* time-ago helper (for live badge text) */
-    /* time-ago helper (for live badge text)
-       NOTE: auto-updating removed — we compute the label once on load only.
-    */
     function timeAgoText(iso) {
       if (!iso) return '—';
       const then = new Date(iso);
@@ -357,12 +373,8 @@
       const diff = Math.floor((now - then) / 1000);
       if (diff < 5) return 'just now';
       if (diff < 60) return diff + 's ago';
-      if (diff < 3600) {
-        const m = Math.floor(diff/60); const s = diff % 60; return m + 'm ' + s + 's ago';
-      }
-      if (diff < 86400) {
-        const h = Math.floor(diff/3600); const mm = Math.floor((diff%3600)/60); return h + 'h ' + mm + 'm ago';
-      }
+      if (diff < 3600) { const m = Math.floor(diff/60); const s = diff % 60; return m + 'm ' + s + 's ago'; }
+      if (diff < 86400) { const h = Math.floor(diff/3600); const mm = Math.floor((diff%3600)/60); return h + 'h ' + mm + 'm ago'; }
       const days = Math.floor(diff/86400); return days + 'd ago';
     }
 
@@ -370,100 +382,18 @@
       const liveBadge = document.getElementById('liveBadge');
       const liveText = document.getElementById('liveText');
       if (!liveBadge || !liveText) return;
-      function refreshBadgeText() {
       function refreshBadgeTextOnce() {
         const iso = liveBadge.dataset.latestIso;
         const views = parseInt(liveBadge.dataset.views || '0', 10);
         const ago = timeAgoText(iso);
         liveText.textContent = 'Updated ' + ago + ' • ' + (Number.isFinite(views) ? views.toLocaleString() : '—') + ' views';
       }
-      refreshBadgeText();
-      // keep the local "time ago" updater (does not call server)
-      setInterval(refreshBadgeText, 10 * 1000);
-      // compute text once at load — auto refresh removed
       refreshBadgeTextOnce();
     })();
 
-    /* kept helpers that may be useful for inline DOM updates (no network calls here) */
+    /* kept helpers for inline DOM updates (no network calls here) */
     function formatNum(n) { return (n === null || n === undefined || n === "") ? "—" : Number(n).toLocaleString(); }
-    function formatMaybeSigned(n) {
-      if (n === null || n === undefined || n === "") return "—";
-      try { n = Number(n); return (n >= 0 ? "+" : "") + n.toLocaleString(); } catch(e) { return String(n); }
-    }
-
-    // update a single table-row (matching row) using latest_row object
-    // NOTE: this function is left in place for potential inline updates by other parts of your app,
-    // but there's no longer any fetch/refresh code here by default.
-    function updateMatchingRow(latest_row, latest_views, hourly_like_gain) {
-      if (!latest_row || !latest_row.ts_ist) return;
-      const selector = `tr[data-ts="${latest_row.ts_ist}"]`;
-      const row = document.querySelector(selector);
-      if (!row) return;
-      const tds = row.querySelectorAll('td');
-      if (tds.length < 10) return;
-
-      // Views
-      if (latest_views != null) {
-        const newViewsTxt = formatNum(latest_views);
-        if (tds[1].textContent !== newViewsTxt) tds[1].textContent = newViewsTxt;
-      }
-
-      // Gain (5m)
-      if (latest_row.gain_5m != null) {
-        tds[2].innerHTML = (latest_row.gain_5m >= 0)
-          ? `<span class="gain-pos">+${Number(latest_row.gain_5m).toLocaleString()}</span>`
-          : `<span class="gain-neg">${Number(latest_row.gain_5m).toLocaleString()}</span>`;
-      }
-
-      // Hourly gain (views)
-      if (latest_row.hourly_gain != null) {
-        tds[3].innerHTML = (latest_row.hourly_gain >= 0)
-          ? `<span class="gain-pos">+${Number(latest_row.hourly_gain).toLocaleString()}</span>`
-          : `<span class="gain-neg">${Number(latest_row.hourly_gain).toLocaleString()}</span>`;
-      }
-
-      // 24h gain
-      if (latest_row.gain_24h != null) {
-        tds[4].innerHTML = (latest_row.gain_24h >= 0)
-          ? `<span class="gain-pos">+${Number(latest_row.gain_24h).toLocaleString()}</span>`
-          : `<span class="gain-neg">${Number(latest_row.gain_24h).toLocaleString()}</span>`;
-      }
-
-      // projected
-      if (latest_row.projected != null) {
-        tds[5].textContent = Number(latest_row.projected).toLocaleString();
-      }
-
-      // compare diff
-      if (latest_row.comp_diff != null) {
-        tds[6].innerHTML = (latest_row.comp_diff >= 0)
-          ? `<span class="gain-pos">+${Number(latest_row.comp_diff).toLocaleString()}</span>`
-          : `<span class="gain-neg">${Number(latest_row.comp_diff).toLocaleString()}</span>`;
-      }
-
-      // likes delta
-      if (latest_row.likes_delta != null) {
-        tds[7].innerHTML = (latest_row.likes_delta >= 0)
-          ? `<span class="num-views">+${Number(latest_row.likes_delta).toLocaleString()}</span>`
-          : `<span class="gain-neg">${Number(latest_row.likes_delta).toLocaleString()}</span>`;
-      } else if (hourly_like_gain != null) {
-        tds[7].innerHTML = (hourly_like_gain >= 0)
-          ? `<span class="num-views">+${Number(hourly_like_gain).toLocaleString()}</span>`
-          : `<span class="gain-neg">${Number(hourly_like_gain).toLocaleString()}</span>`;
-      }
-
-      // prediction
-      if (latest_row.prediction != null) {
-        tds[8].textContent = Number(latest_row.prediction).toLocaleString();
-      }
-
-      // engagement
-      if (latest_row.engagement_rate != null) {
-        try {
-          tds[9].textContent = Number(latest_row.engagement_rate).toFixed(3) + "%";
-        } catch(e){}
-      }
-    }
+    function formatMaybeSigned(n) { if (n === null || n === undefined || n === "") return "—"; try { n = Number(n); return (n >= 0 ? "+" : "") + n.toLocaleString(); } catch(e) { return String(n); } }
 
   })();
 </script>
