@@ -865,7 +865,10 @@ def process_gains(rows_asc: list[dict]):
               optionally likes, comments
 
     Returns list of tuples:
-      (ts_ist_str, views, gain_5min, hourly_gain, gain_24h, hourly_pct_change, likes, comments)
+      (ts_ist_str, views, gain_5min, hourly_views_gain, hourly_likes_gain, gain_24h,
+       hourly_pct_change, likes_val, comments_val)
+
+    hourly_likes_gain may be None when likes are missing or interpolation isn't possible.
     """
     out = []
     n = len(rows_asc)
@@ -875,6 +878,18 @@ def process_gains(rows_asc: list[dict]):
     ts_list = [r["ts_utc"].timestamp() for r in rows_asc]  # floats seconds
     views_list = [int(r["views"]) for r in rows_asc]
 
+    # build likes list preserving None for missing/invalid likes
+    likes_list = []
+    for r in rows_asc:
+        lk = r.get("likes")
+        if lk is None:
+            likes_list.append(None)
+        else:
+            try:
+                likes_list.append(int(lk))
+            except Exception:
+                likes_list.append(None)
+
     for i, r in enumerate(rows_asc):
         ts_utc = r["ts_utc"]
         ts_ist = ts_utc.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S")
@@ -883,9 +898,9 @@ def process_gains(rows_asc: list[dict]):
         # gain in last 5 minutes (previous sample)
         gain_5min = None if i == 0 else views - views_list[i - 1]
 
-        # ---------- hourly gain ----------
+        # ---------- hourly gain (views) ----------
         target_h_ts = (ts_utc - timedelta(hours=1)).timestamp()
-        hourly = None
+        hourly_views = None
         pos = bisect.bisect_right(ts_list, target_h_ts, 0, i + 1)
         prev_idx = pos - 1
         next_idx = pos if pos <= i else None
@@ -899,18 +914,47 @@ def process_gains(rows_asc: list[dict]):
                 frac = (target_h_ts - t0) / (t1 - t0)
                 ref_val = v0 + frac * (v1 - v0)
             try:
-                hourly = views - int(round(ref_val))
+                hourly_views = views - int(round(ref_val))
             except Exception:
-                hourly = None
+                hourly_views = None
         elif prev_idx >= 0:
             try:
-                hourly = views - views_list[prev_idx]
+                hourly_views = views - views_list[prev_idx]
             except Exception:
-                hourly = None
+                hourly_views = None
         else:
-            hourly = None
+            hourly_views = None
 
-        # ---------- 24h gain ----------
+        # ---------- hourly likes gain (interpolated when possible) ----------
+        likes_val = likes_list[i]
+        hourly_likes = None
+        try:
+            if likes_val is not None:
+                # try interpolation similar to views
+                if prev_idx >= 0 and next_idx is not None:
+                    l0 = likes_list[prev_idx]
+                    l1 = likes_list[next_idx]
+                    if l0 is not None and l1 is not None:
+                        t0 = ts_list[prev_idx]; t1 = ts_list[next_idx]
+                        if t1 == t0:
+                            ref_likes = l1
+                        else:
+                            frac = (target_h_ts - t0) / (t1 - t0)
+                            ref_likes = l0 + frac * (l1 - l0)
+                        hourly_likes = likes_val - int(round(ref_likes))
+                    elif l0 is not None:
+                        # fallback to previous known likes (no interpolation)
+                        hourly_likes = likes_val - l0
+                    else:
+                        hourly_likes = None
+                elif prev_idx >= 0:
+                    l0 = likes_list[prev_idx]
+                    if l0 is not None:
+                        hourly_likes = likes_val - l0
+        except Exception:
+            hourly_likes = None
+
+        # ---------- 24h gain (views) ----------
         target_d_ts = (ts_utc - timedelta(days=1)).timestamp()
         posd = bisect.bisect_right(ts_list, target_d_ts, 0, i + 1)
         prev_idx_d = posd - 1
@@ -929,11 +973,14 @@ def process_gains(rows_asc: list[dict]):
             except Exception:
                 gain_24h = None
         elif prev_idx_d >= 0:
-            gain_24h = views - views_list[prev_idx_d]
+            try:
+                gain_24h = views - views_list[prev_idx_d]
+            except Exception:
+                gain_24h = None
         else:
             gain_24h = None
 
-        # ---------- hourly percent change ----------
+        # ---------- hourly percent change (views) ----------
         hourly_pct_change = None
         if i > 0:
             prev_idx_row = i - 1
@@ -959,19 +1006,28 @@ def process_gains(rows_asc: list[dict]):
             else:
                 prev_hourly = None
 
-            if hourly is not None and prev_hourly not in (None, 0):
+            if hourly_views is not None and prev_hourly not in (None, 0):
                 try:
-                    hourly_pct_change = round(((hourly - prev_hourly) / prev_hourly) * 100, 2)
+                    hourly_pct_change = round(((hourly_views - prev_hourly) / prev_hourly) * 100, 2)
                 except Exception:
                     hourly_pct_change = None
 
-        # likes/comments values for this row (may be None)
-        likes_val = r.get("likes")
         comments_val = r.get("comments")
 
-        out.append((ts_ist, views, gain_5min, hourly, gain_24h, hourly_pct_change, likes_val, comments_val))
+        out.append((
+            ts_ist,
+            views,
+            gain_5min,
+            hourly_views,       # hourly views gain
+            hourly_likes,       # <-- NEW hourly likes gain
+            gain_24h,
+            hourly_pct_change,
+            r.get("likes"),
+            comments_val
+        ))
 
     return out
+
 
 # -----------------------------
 # Background sampler + channel snapshots
@@ -1283,6 +1339,7 @@ def build_video_display(vid: str):
      - fetches comparison video rows only for the same window
      - also fetches a fixed reference video (REF_COMPARE_VIDEO_ID) to compute a per-row
        5-minute ratio against that reference video's 5-min gain.
+
     Returns dict suitable for templates (same shape as earlier code).
     """
     nowu = now_utc()
@@ -1365,7 +1422,7 @@ def build_video_display(vid: str):
             grouped.setdefault(date_str, []).append(tpl)
             date_time_map.setdefault(date_str, {})[time_part] = tpl
 
-        # processed comp rows into date/time map if available
+        # process comp rows into date/time map if available
         comp_date_map = {}
         if comp_rows:
             comp_processed = process_gains(comp_rows)
@@ -1396,13 +1453,14 @@ def build_video_display(vid: str):
             prev_likes_for_date = None
 
             for tpl in processed:
-                # tpl: (ts_ist, views, gain_5m, hourly_gain, gain_24h, hourly_pct_change, likes_val, comments_val)
-                (ts_ist, views, gain_5m, hourly_gain, gain_24h, pct24, likes_val, comments_val) = tpl
+                # tpl: (ts_ist, views, gain_5m, hourly_views_gain, hourly_likes_gain, gain_24h, hourly_pct_change, likes_val, comments_val)
+                (ts_ist, views, gain_5m, hourly_views_gain, hourly_likes_gain, gain_24h, hourly_pct_change, likes_val, comments_val) = tpl
                 time_part = ts_ist.split(" ")[1]
 
                 # --- change 24h vs prev day (tolerant match) ---
+                # prev_map uses same tuple shape; gain_24h is at index 5
                 prev_tpl = prev_map.get(time_part) or find_closest_tpl(prev_map, time_part, tolerance_seconds=10)
-                prev_gain24 = prev_tpl[4] if prev_tpl else None
+                prev_gain24 = prev_tpl[5] if prev_tpl else None
                 pct24_calc = None
                 if prev_gain24 not in (None, 0):
                     try:
@@ -1415,7 +1473,7 @@ def build_video_display(vid: str):
                 ref_2230 = find_closest_prev(prev_map, "22:30:00", max_earlier_seconds=300)
                 if ref_2230 and pct24_calc not in (None,):
                     base_views = ref_2230[1]
-                    base_gain = ref_2230[4]
+                    base_gain = ref_2230[5]  # gain_24h at index 5
                     if base_views is not None and base_gain not in (None, 0):
                         try:
                             projected = int(base_views + base_gain * (1 + pct24_calc / 100.0))
@@ -1446,7 +1504,7 @@ def build_video_display(vid: str):
                         ref_match = find_closest_prev(prev_ref_map, time_part, max_earlier_seconds=300)
                     if ref_match:
                         try:
-                            ref_gain5 = ref_match[2]  # gain_5m of reference
+                            ref_gain5 = ref_match[2]  # gain_5m of reference stays at index 2
                         except Exception:
                             ref_gain5 = None
                         if gain_5m not in (None,) and ref_gain5 not in (None, 0):
@@ -1475,11 +1533,11 @@ def build_video_display(vid: str):
                 except Exception:
                     engagement_rate = None
 
-                # Append canonical tuple now includes likes_gain (instead of absolute likes)
-                # (ts_ist, views, gain_5m, hourly_gain, gain_24h, pct24, projected, comp_diff,
-                #  five_min_ratio, likes_gain, comments_val, engagement_rate)
+                # Append canonical tuple now includes hourly_likes and likes_gain
+                # (ts_ist, views, gain_5m, hourly_views_gain, hourly_likes_gain, gain_24h, hourly_pct_change,
+                #  projected, comp_diff, five_min_ratio, likes_gain, comments_val, engagement_rate)
                 display_rows.append((
-                    ts_ist, views, gain_5m, hourly_gain, gain_24h, pct24_calc,
+                    ts_ist, views, gain_5m, hourly_views_gain, hourly_likes_gain, gain_24h, hourly_pct_change,
                     projected, comp_diff, five_min_ratio, likes_gain, comments_val, engagement_rate
                 ))
 
@@ -1574,6 +1632,7 @@ def build_video_display(vid: str):
         _video_display_cache[vid] = (result, time.time())
 
     return result
+
 
 # -----------------------------
 # Auth routes
@@ -2549,8 +2608,9 @@ def export_video(video_id):
     """
     Export all stored rows for a video into Excel.
     Columns (in this order):
-      Time (IST), Views, Gain (5 min), Hourly Gain, Gain (24 h),
-      Change 24h vs prev day (%), Projected (min) views, Compare diff
+      Time (IST), Views, Gain (5 min), Hourly Gain (views), Hourly Likes Gain,
+      Gain (24 h), Change 24h vs prev day (%), Projected (min) views, Compare diff,
+      Likes, Comments, Engagement Rate (%)
     """
     info = build_video_display(video_id)
     if info is None:
@@ -2565,28 +2625,21 @@ def export_video(video_id):
         day_rows = list(reversed(info["daily"][date]))
 
         for tpl in day_rows:
-            # tpl might have slightly different shapes depending on your pipeline.
-            # Expected canonical order (8 items):
-            # (ts, views, gain5, hourly_gain, gain24, pct24, projected, comp_diff)
-                        # tpl canonical shape:
-            # (ts, views, gain5, hourly_gain, gain24, pct24, projected, comp_diff, five_min_ratio, likes, comments, engagement_rate)
+            # tpl canonical shape:
+            # (ts, views, gain5, hourly_views_gain, hourly_likes_gain, gain24, pct24_calc,
+            #  projected, comp_diff, five_min_ratio, likes_gain, comments_val, engagement_rate)
             ts = tpl[0]
             views = tpl[1] if len(tpl) > 1 else None
 
             # defaults
-            gain5 = hourly_gain = gain24 = pct24 = projected = comp_diff = five_min_ratio = likes = comments = engagement_rate = None
+            gain5 = hourly_views_gain = hourly_likes_gain = gain24 = pct24 = projected = comp_diff = five_min_ratio = likes_gain = comments = engagement_rate = None
 
             rest = list(tpl[2:])  # remaining fields after ts and views
 
             # Map rest by position when present
-            # expected order for rest: gain5, hourly_gain, gain24, pct24, projected, comp_diff, five_min_ratio, likes, comments, engagement_rate
-            if len(rest) >= 10:
-                gain5, hourly_gain, gain24, pct24, projected, comp_diff, five_min_ratio, likes, comments, engagement_rate = rest[:10]
-            else:
-                # fill as many as available
-                fields = ["gain5","hourly_gain","gain24","pct24","projected","comp_diff","five_min_ratio","likes","comments","engagement_rate"]
-                vals = rest + [None] * (10 - len(rest))
-                gain5, hourly_gain, gain24, pct24, projected, comp_diff, five_min_ratio, likes, comments, engagement_rate = vals
+            # expected order for rest: gain5, hourly_views_gain, hourly_likes_gain, gain24, pct24, projected, comp_diff, five_min_ratio, likes_gain, comments, engagement_rate
+            vals = rest + [None] * (11 - len(rest))
+            (gain5, hourly_views_gain, hourly_likes_gain, gain24, pct24, projected, comp_diff, five_min_ratio, likes_gain, comments, engagement_rate) = vals[:11]
 
             pct24_str = ""
             if pct24 is not None and pct24 != "":
@@ -2606,12 +2659,13 @@ def export_video(video_id):
                 "Time (IST)": ts,
                 "Views": views if views is not None else "",
                 "Gain (5 min)": gain5 if gain5 is not None else "",
-                "Hourly Gain": hourly_gain if hourly_gain is not None else "",
+                "Hourly Gain (views)": hourly_views_gain if hourly_views_gain is not None else "",
+                "Hourly Likes Gain": hourly_likes_gain if hourly_likes_gain is not None else "",
                 "Gain (24 h)": gain24 if gain24 is not None else "",
                 "Change 24h vs prev day (%)": pct24_str,
                 "Projected (min) views": projected if projected is not None else "",
                 "Compare diff": comp_diff if comp_diff is not None else "",
-                "Likes": likes if likes is not None else "",
+                "Likes": likes_gain if likes_gain is not None else "",
                 "Comments": comments if comments is not None else "",
                 "Engagement Rate (%)": eng_str
             })
@@ -2666,9 +2720,9 @@ def export_video(video_id):
     with pd.ExcelWriter(bio, engine="openpyxl") as writer:
         # ensure column order in file by creating DataFrame with exact keys in order above
         cols_order = [
-            "Time (IST)", "Views", "Gain (5 min)", "Hourly Gain",
+            "Time (IST)", "Views", "Gain (5 min)", "Hourly Gain (views)", "Hourly Likes Gain",
             "Gain (24 h)", "Change 24h vs prev day (%)",
-            "Projected (min) views", "Compare diff"
+            "Projected (min) views", "Compare diff", "Likes", "Comments", "Engagement Rate (%)"
         ]
         # if df_views lacks any column (edge case), create them to preserve order
         for c in cols_order:
@@ -2687,6 +2741,7 @@ def export_video(video_id):
         download_name=f"{safe}_views.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 
 
 # Bootstrap
