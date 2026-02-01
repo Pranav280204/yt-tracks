@@ -164,27 +164,8 @@
           {% endif %}
         </div>
 
-        {% if v.thumbnail_changed %}
-          <div class="alert alert-warning alert-dismissible fade show mt-3" role="alert">
-            <div class="d-flex align-items-start justify-content-between gap-2">
-              <div>
-                <strong>Thumbnail changed</strong>
-                {% if v.thumbnail_prev_url %}
-                  — <a href="{{ v.thumbnail_prev_url }}" target="_blank" rel="noopener noreferrer">previous thumbnail</a>
-                {% endif %}
-                {% if v.thumbnail_changed_at %}
-                  <div class="small muted mt-1">Detected: {{ v.thumbnail_changed_at }}</div>
-                {% endif %}
-              </div>
-              <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-            </div>
-            {% if v.thumbnail %}
-              <div class="mt-3">
-                <img src="{{ v.thumbnail }}" alt="new thumbnail" class="thumb-preview">
-              </div>
-            {% endif %}
-          </div>
-        {% endif %}
+        <!-- thumbnail-change alert REMOVED as requested -->
+
       </div>
 
       <!-- Actions -->
@@ -372,6 +353,7 @@
                       <th>Total Views</th>
                       <th>Gain (5 min)</th>
                       <th>Hourly Gain</th>
+                      <th>Prediction</th>
                       <th>24h Gain ⓘ</th>
                       <th>Change 24h vs prev day (%)</th>
                       <th>Projected (min) views</th>
@@ -387,12 +369,13 @@
                       {% set views = row[1] if row|length > 1 else None %}
                       {% set gain5 = row[2] if row|length > 2 else None %}
                       {% set hourly_gain = row[3] if row|length > 3 else None %}
-                      {% set gain24 = row[4] if row|length > 4 else None %}
-                      {% set pct24 = row[5] if row|length > 5 else None %}
-                      {% set projected = row[6] if row|length > 6 else None %}
-                      {% set comp_diff = row[7] if row|length > 7 else None %}
-                      {% set likes = row[9] if row|length > 9 else None %}
-                      {% set engagement = row[11] if row|length > 11 else None %}
+                      {% set prediction = row[4] if row|length > 4 else None %}
+                      {% set gain24 = row[5] if row|length > 5 else None %}
+                      {% set pct24 = row[6] if row|length > 6 else None %}
+                      {% set projected = row[7] if row|length > 7 else None %}
+                      {% set comp_diff = row[8] if row|length > 8 else None %}
+                      {% set likes = row[10] if row|length > 10 else None %}
+                      {% set engagement = row[12] if row|length > 12 else None %}
                       <tr>
                         <td class="mono">{{ ts }}</td>
 
@@ -410,6 +393,12 @@
                           {% if hourly_gain is none %}<span class="gain-null">—</span>
                           {% elif hourly_gain >= 0 %}<span class="gain-pos">+{{ "{:,}".format(hourly_gain) }}</span>
                           {% else %}<span class="gain-neg">{{ "{:,}".format(hourly_gain) }}</span>{% endif %}
+                        </td>
+
+                        <td>
+                          {% if prediction is none %}<span class="gain-null">—</span>
+                          {% elif prediction >= 0 %}<span class="num-likes">+{{ "{:,}".format(prediction) }}</span>
+                          {% else %}<span class="gain-neg">{{ "{:,}".format(prediction) }}</span>{% endif %}
                         </td>
 
                         <td>
@@ -556,8 +545,6 @@
         const iso = liveBadge.dataset.latestIso;
         const views = parseInt(liveBadge.dataset.views || '0', 10);
         const ago = timeAgoText(iso);
-        liveText.textContent = 'Updated ' + ago + ' • ' + views.toLocaleString() + ' views';
-        // If the latest timestamp is very recent, display "Updated just now" to avoid flicker
         liveText.textContent = 'Updated ' + ago + ' • ' + (Number.isFinite(views) ? views.toLocaleString() : '—') + ' views';
       }
       refresh();
