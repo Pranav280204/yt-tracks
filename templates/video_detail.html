@@ -6,83 +6,130 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
-    :root{ --accent-blue:#e9f3ff; --accent-green:#e9f9f0; --accent-red:#ffecec; --text-dark:#0a0a0a; --muted:#5b5b5b; --border:#e6e6e6; --positive:#198754; --negative:#dc3545; --neutral:#6c757d; --primary:#0d6efd; --engagement:#0dcaf0; }
-    html,body{height:100%}
-    body{ background:#fff; color:var(--text-dark); font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; margin:0; padding:0; }
+    :root{
+      --accent-blue:#e9f3ff;
+      --accent-green:#e9f9f0;
+      --accent-red:#ffecec;
+      --text-dark:#0a0a0a;
+      --muted:#5b5b5b;
+      --border:#e6e6e6;
+      --positive:#198754;
+      --negative:#dc3545;
+      --neutral:#6c757d;
+      --primary:#0d6efd;
+      --likes:#6f42c1;
+      --engagement:#0dcaf0;
+    }
 
+    html,body{height:100%}
+    body{ background:#fff; color:var(--text-dark); font-family:Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; }
     .card{ background:#fff; border:1px solid var(--border); box-shadow: 0 1px 2px rgba(0,0,0,0.03); border-radius:10px; }
     .small-note { font-size:.86rem; color:var(--muted); }
+
     .gain-pos{ background:rgba(25,135,84,0.09); color:var(--positive); padding:.12rem .45rem; border-radius:.375rem; display:inline-block; font-weight:600;}
     .gain-neg{ background:rgba(220,53,69,0.08); color:var(--negative); padding:.12rem .45rem; border-radius:.375rem; display:inline-block; font-weight:600;}
     .gain-null{ color:var(--muted); }
+
     .mono{ font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", "Courier New", monospace; }
+
     .num-views { color:var(--primary); font-weight:700; }
     .num-projected { color:#0b5ed7; font-weight:600; }
+    .num-likes { color:var(--likes); font-weight:700; }
     .num-eng { color:var(--engagement); font-weight:700; }
-    .pred-pos { color: var(--positive); font-weight:700; }
-    .pred-neg { color: var(--negative); font-weight:700; }
-    .pred-neutral { color: var(--neutral); }
+    .num-pct-pos { color:var(--positive); font-weight:700; }
+    .num-pct-neg { color:var(--negative); font-weight:700; }
 
-    /* layout */
-    .video-hero { max-width:1200px; margin:0 auto; display:flex; gap:1rem; align-items:flex-start; flex-wrap:wrap; padding:0 0.5rem; }
+    .video-hero { max-width:1200px; margin:0 auto; display:flex; gap:1rem; align-items:flex-start; }
     .thumb-wrap { flex:1 1 55%; min-width:0; }
-    .video-thumb { width:100%; height:240px; object-fit:cover; border-radius:.5rem; background:#f2f2f2; display:block; border:1px solid var(--border); }
+    .video-thumb {
+      width:100%;
+      height:240px;
+      object-fit:cover;
+      border-radius:.5rem;
+      background:#f2f2f2;
+      display:block;
+      border:1px solid var(--border);
+    }
+
     .video-title { font-size:1.25rem; margin-top:.3rem; margin-bottom:0.25rem; line-height:1.2; font-weight:700; }
-    .live-badge { display:inline-flex; gap:.6rem; align-items:center; padding:.35rem .6rem; border-radius:.45rem; background:#f7f9fb; border:1px solid var(--border); margin-top:.45rem; font-size:.94rem; white-space:nowrap; }
+
+    .live-badge {
+      display:inline-flex;
+      gap:.6rem;
+      align-items:center;
+      padding:.35rem .6rem;
+      border-radius:.45rem;
+      background:#f7f9fb;
+      border:1px solid var(--border);
+      margin-top:.45rem;
+      font-size:.94rem;
+      white-space:nowrap;
+    }
     .live-badge .dot { width:9px; height:9px; border-radius:50%; background:#28a745; }
     .live-sub { display:block; font-size:.85rem; color:var(--muted); margin-top:.12rem; }
+
     .action-row { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; margin-top:.8rem; }
     .action-row .btn { min-width:110px; flex:0 0 auto; }
     .action-row form { margin:0; display:flex; gap:.45rem; align-items:center; }
 
     .content-wrap { max-width:1200px; margin:1rem auto; padding:0 0.5rem; }
+
     .date-row { display:flex; gap:.5rem; align-items:center; margin-bottom:.75rem; flex-wrap:wrap; }
+    .date-row .btn { min-width:90px; }
+    .date-select { min-width:200px; max-width:320px; }
+
     .table thead th { font-size:.9rem; border-bottom:1px solid var(--border); white-space:nowrap; }
     .table td, .table th { vertical-align:middle; font-size:.92rem; border-top:1px solid #fafafa; white-space:nowrap; }
     .table-card { padding:.75rem; border-radius:.5rem; border:1px solid var(--border); background:linear-gradient(180deg,#ffffff,#fbfcff); }
 
+    /* make stats panel normal (not sticky or fixed-width) per request */
     .stats-panel { position:static; width:100%; align-self:flex-start; }
     .stat-large { font-size:1.5rem; font-weight:800; }
     .stat-sub { font-size:.85rem; color:var(--muted); }
 
-    /* Targets list styling (big cards like screenshot) */
-    .targets-list .target-row { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:1rem; border-radius:.5rem; background:#fafbfc; border:1px solid var(--border); }
-    .target-left { flex:1 1 60%; }
-    .target-right { text-align:right; min-width:200px; }
-    .target-goal { font-weight:800; font-size:1.25rem; }
-    .target-meta { color:var(--muted); font-size:.9rem; }
-    .target-stats { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace; }
-    .target-remove { margin-top:.5rem; }
+    .target-card{ background:#f8f9fa; border:1px solid var(--border); border-radius:.5rem; padding:.5rem .75rem; margin-bottom:.5rem; }
 
-    /* Add-target inline form (compact) */
-    .add-target-row { display:flex; gap:.5rem; align-items:center; margin-top:.5rem; flex-wrap:wrap; }
-    .add-target-row input, .add-target-row button { height:38px; }
+    .badge-soft { background:rgba(13,110,253,0.08); color:var(--primary); font-weight:600; padding:.3rem .5rem; border-radius:.375rem; }
 
-    @media (min-width: 992px) {
-      .stats-panel { flex: 0 0 320px; max-width: 320px; }
-      .thumb-wrap { flex: 1 1 55%; }
+    .thumb-preview { max-width:280px; border-radius:.375rem; border:1px solid var(--border); display:block; margin-top:.5rem; }
+
+    @media (hover:hover) {
+      .table tbody tr:hover { background: rgba(13,110,253,0.02); }
     }
 
-    /* mobile tweaks */
+    /* Responsive tweaks (mobile-first) */
+    @media (max-width: 991.98px) {
+      .video-hero { gap: .8rem; }
+    }
+
     @media (max-width: 767.98px) {
-      .video-hero { flex-direction:column; }
-      .action-row { gap:.5rem; flex-direction:column; align-items:stretch; }
-      .action-row .form-control, .action-row .btn { width:100%; }
-      .target-right { min-width:120px; text-align:left; margin-top:.5rem; }
-      .targets-list .target-row { flex-direction:column; align-items:flex-start; }
-      .add-target-row { flex-direction:column; align-items:stretch; }
-      .add-target-row input, .add-target-row button { width:100%; }
-      .video-thumb { height:200px; }
+      .video-hero { flex-direction:column; align-items:stretch; }
+      .video-thumb { height:200px; border-radius:.5rem; }
+      .thumb-wrap { order:0; }
+      .stats-panel { order:1; margin-top:0.6rem; }
+      .action-row .btn, .action-row input { min-width:unset; width:100%; }
+      .action-row { flex-direction:column; align-items:stretch; }
+
+      .table thead th, .table td { font-size:.80rem; }
+      .table { font-size:.85rem; }
+
+      .thumb-preview { max-width:100%; }
+
+      .date-select { min-width:120px; width:100%; }
+
+      form.d-flex.gap-2 { flex-direction:column; }
     }
 
-    @media (hover:hover) { .table tbody tr:hover { background: rgba(13,110,253,0.02); } }
+    /* allow table horizontal scroll */
     .table-responsive { overflow-x:auto; -webkit-overflow-scrolling:touch; }
+
   </style>
 </head>
 <body>
 <div class="container py-3">
+
   <!-- Top nav -->
-  <div class="d-flex justify-content-between align-items-center mb-2" style="padding:0 .5rem;">
+  <div class="d-flex justify-content-between align-items-center mb-2">
     <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('home') }}">← Back</a>
     <div class="d-flex align-items-center gap-2">
       {% if current_user %}
@@ -98,7 +145,7 @@
   <div class="video-hero mb-3">
     <div class="thumb-wrap">
       <a href="https://www.youtube.com/watch?v={{ v.video_id }}" target="_blank" rel="noopener noreferrer">
-        <img class="video-thumb" id="mainThumb" src="{{ v.thumbnail }}" alt="thumbnail for {{ v.name }}">
+        <img class="video-thumb" src="{{ v.thumbnail }}" alt="thumbnail for {{ v.name }}">
       </a>
 
       <div class="mt-2">
@@ -109,22 +156,46 @@
           {% if v.latest_ts_iso and v.latest_views is not none %}
             <div class="live-badge" id="liveBadge" data-latest-iso="{{ v.latest_ts_iso }}" data-views="{{ v.latest_views|int }}">
               <span class="dot" aria-hidden="true"></span>
-              <span id="liveText">Updated just now • <span id="liveViews" class="num-views">{{ "{:,}".format(v.latest_views) }}</span> views</span>
+              <span id="liveText">Updated just now • <span class="num-views">{{ "{:,}".format(v.latest_views) }}</span> views</span>
             </div>
             <div class="live-sub" id="liveSub">IST: {% if v.latest_ts_ist %}{{ v.latest_ts_ist }}{% else %}—{% endif %}</div>
           {% else %}
             <div class="small-note">No samples yet.</div>
           {% endif %}
         </div>
+
+        {% if v.thumbnail_changed %}
+          <div class="alert alert-warning alert-dismissible fade show mt-3" role="alert">
+            <div class="d-flex align-items-start justify-content-between gap-2">
+              <div>
+                <strong>Thumbnail changed</strong>
+                {% if v.thumbnail_prev_url %}
+                  — <a href="{{ v.thumbnail_prev_url }}" target="_blank" rel="noopener noreferrer">previous thumbnail</a>
+                {% endif %}
+                {% if v.thumbnail_changed_at %}
+                  <div class="small muted mt-1">Detected: {{ v.thumbnail_changed_at }}</div>
+                {% endif %}
+              </div>
+              <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+            {% if v.thumbnail %}
+              <div class="mt-3">
+                <img src="{{ v.thumbnail }}" alt="new thumbnail" class="thumb-preview">
+              </div>
+            {% endif %}
+          </div>
+        {% endif %}
       </div>
 
-      <!-- Actions: Export + Pause/Resume + Remove (removed small inline target form) -->
+      <!-- Actions -->
       <div class="mt-3 action-row">
         <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('export_video', video_id=v.video_id) }}">Export</a>
 
         <form method="POST" action="{{ url_for('stop_tracking', video_id=v.video_id) }}" class="d-flex align-items-center">
           <input class="form-control form-control-sm" type="password" name="admin_secret" placeholder="Admin pwd" required style="max-width:130px;">
-          <button class="btn btn-outline-warning btn-sm" type="submit">{% if v.is_tracking %}Pause{% else %}Resume{% endif %}</button>
+          <button class="btn btn-outline-warning btn-sm" type="submit">
+            {% if v.is_tracking %}Pause{% else %}Resume{% endif %}
+          </button>
         </form>
 
         <form method="POST" action="{{ url_for('remove_video', video_id=v.video_id) }}" onsubmit="return confirm('Delete this video and ALL its data?')" class="d-flex align-items-center">
@@ -134,30 +205,31 @@
       </div>
     </div>
 
-    <!-- Right-side stats panel -->
-    <div class="stats-panel col-lg-4" style="padding:0 .5rem;">
+    <!-- Right-side stats panel (now normal size; only latest views + updated time) -->
+    <div class="stats-panel col-lg-4" style="flex:0 0 320px;">
       <div class="card p-3 mb-3">
         <div class="d-flex justify-content-between align-items-start">
           <div>
-            <div id="statViews" class="stat-large">{{ "{:,}".format(v.latest_views or 0) }}</div>
+            <div class="stat-large num-views">{{ "{:,}".format(v.latest_views or 0) }}</div>
             <div class="stat-sub">Latest total views</div>
           </div>
           <div class="text-end">
             {% if v.latest_ts_ist %}
               <div class="small-note">Updated</div>
-              <div id="statUpdated" class="mono">{{ v.latest_ts_ist }}</div>
+              <div class="mono">{{ v.latest_ts_ist }}</div>
             {% endif %}
           </div>
         </div>
 
         <hr class="my-2">
+
         <div class="small-note mb-2">Quick actions</div>
         <div class="d-grid gap-2">
           <a class="btn btn-sm btn-outline-primary" href="{{ url_for('video_stats', video_id=v.video_id) }}">More stats</a>
         </div>
       </div>
 
-      <!-- Targets compact card (summary) -->
+      <!-- Targets compact card (removed "Manage" link as requested) -->
       <div class="card p-3">
         <div class="d-flex justify-content-between align-items-center mb-2">
           <strong>Targets</strong>
@@ -165,50 +237,116 @@
         {% if v.targets|length == 0 %}
           <div class="muted small-note">No active targets</div>
         {% else %}
-          <div class="targets-list">
-            {% for t in v.targets %}
-              <div class="target-row mb-3">
-                <div class="target-left">
-                  <div class="target-goal">{{ "{:,}".format(t.target_views) }}</div>
-                  <div class="target-meta">by {{ t.target_ts_ist }}</div>
-                  {% if t.note %}<div class="small-note mt-1">{{ t.note }}</div>{% endif %}
+          {% for t in v.targets[:3] %}
+            <div class="mb-2">
+              <div class="d-flex justify-content-between align-items-center">
+                <div>
+                  <div class="small-note">Goal</div>
+                  <div class="fw-bold">{{ "{:,}".format(t.target_views) }}</div>
                 </div>
-                <div class="target-right">
+                <div class="text-end">
                   {% if t.status == 'reached' %}
                     <div class="badge bg-success">Reached</div>
                   {% elif t.status == 'overdue' %}
                     <div class="badge bg-danger">Overdue</div>
                   {% else %}
-                    <div class="small-note">Remaining: <strong>{{ "{:,}".format(t.remaining_views) }}</strong></div>
-                    <div class="target-stats">Req/hr: {{ "{:,}".format(t.required_per_hour) }} • 5min: {{ "{:,}".format(t.required_per_5min) }}</div>
+                    <div class="small-note">Remaining</div>
+                    <div class="mono">{{ "{:,}".format(t.remaining_views) }}</div>
                   {% endif %}
-                  <div class="target-remove">
-                    <a class="btn btn-sm btn-outline-danger" href="{{ url_for('remove_target', target_id=t.id) }}" onclick="return confirm('Remove this target?')">Remove</a>
-                  </div>
                 </div>
               </div>
-            {% endfor %}
-          </div>
+              <div class="small-note mt-1">{{ t.target_ts_ist }}</div>
+            </div>
+          {% endfor %}
         {% endif %}
-
-        <!-- Add Target (compact & mobile-friendly) -->
-        <form class="add-target-row pt-2" method="POST" action="{{ url_for('add_target', video_id=v.video_id) }}">
-          <input name="target_views" class="form-control form-control-sm" placeholder="Target views" type="number" min="1" required style="max-width:220px;">
-          <input name="target_ts" class="form-control form-control-sm" type="datetime-local" required style="max-width:260px;">
-          <input name="note" class="form-control form-control-sm" placeholder="Optional note" maxlength="200" style="flex:1 1 200px; min-width:120px;">
-          <button class="btn btn-primary btn-sm" type="submit">Add</button>
-        </form>
-
       </div>
     </div>
   </div>
 
   <div class="content-wrap">
+    <!-- Comparison & Targets area -->
+    <div class="compare-box mb-3 card p-3">
+      <div class="d-flex align-items-center justify-content-between gap-2">
+        <div>
+          <strong>Compare with other video</strong>
+          <div class="small-note">Provide a video link/ID and a comparison date (YYYY-MM-DD). The app will compute offset days automatically.</div>
+        </div>
+        <div class="d-flex gap-2 align-items-center">
+          <form method="POST" class="d-flex gap-2 align-items-center" action="{{ url_for('set_comparison', video_id=v.video_id) }}">
+            <input name="comparison_link" class="form-control form-control-sm" placeholder="Compare video (link or id)" style="min-width:220px;">
+            <input name="comparison_date" type="date" class="form-control form-control-sm" placeholder="YYYY-MM-DD" style="width:150px;">
+            <button class="btn btn-sm btn-primary" type="submit">Set</button>
+          </form>
+
+          <form method="POST" action="{{ url_for('set_comparison', video_id=v.video_id) }}">
+            <input type="hidden" name="comparison_link" value="">
+            <input type="hidden" name="comparison_date" value="">
+            <button class="btn btn-sm btn-outline-secondary" type="submit">Reset</button>
+          </form>
+        </div>
+      </div>
+
+      {% if v.compare_meta %}
+        <div class="mt-2 small-note">
+          Comparing to <strong>{{ v.compare_meta.video_id }}</strong> with offset <strong>{{ v.compare_meta.offset_days }}</strong> days.
+        </div>
+      {% endif %}
+    </div>
+
+    <!-- Targets (full list + add form) -->
+    <div id="targets" class="mt-1 mb-3">
+      <h6 class="mb-2">🎯 Targets</h6>
+      {% if v.targets|length == 0 %}
+        <div class="card-compact muted">No targets yet. Add one below.</div>
+      {% else %}
+        <div class="row g-2 mb-2">
+          {% for t in v.targets %}
+            <div class="col-12">
+              <div class="target-card d-flex justify-content-between align-items-center">
+                <div>
+                  <strong>{{ "{:,}".format(t.target_views) }}</strong>
+                  <small class="muted">by {{ t.target_ts_ist }}</small>
+                  {% if t.note %}<div class="muted small">{{ t.note }}</div>{% endif %}
+                </div>
+                <div class="text-end">
+                  {% if t.status == 'reached' %}
+                    <div class="badge bg-success">Reached</div>
+                  {% elif t.status == 'overdue' %}
+                    <div class="badge bg-danger">Overdue</div>
+                  {% else %}
+                    <div class="muted small">Remaining: {{ "{:,}".format(t.remaining_views) }}</div>
+                    <div class="mono">Req/hr: {{ "{:,}".format(t.required_per_hour) }} • 5min: {{ "{:,}".format(t.required_per_5min) }}</div>
+                  {% endif %}
+                  <div class="mt-1">
+                    <a class="btn btn-sm btn-outline-danger" href="{{ url_for('remove_target', target_id=t.id) }}" onclick="return confirm('Remove this target?')">Remove</a>
+                  </div>
+                </div>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+
+      <!-- Add Target Form -->
+      <form class="row g-2" method="POST" action="{{ url_for('add_target', video_id=v.video_id) }}">
+        <div class="col-12 col-sm-4 col-md-3">
+          <input class="form-control form-control-sm" name="target_views" type="number" min="1" placeholder="Target views" required>
+        </div>
+        <div class="col-12 col-sm-5 col-md-6">
+          <input class="form-control form-control-sm" name="target_ts" type="datetime-local" required>
+        </div>
+        <div class="col-12 col-sm-3 col-md-3 d-flex gap-2">
+          <input class="form-control form-control-sm" name="note" placeholder="Optional note" maxlength="200">
+          <button class="btn btn-primary btn-sm" type="submit">Add</button>
+        </div>
+      </form>
+    </div>
+
     <!-- Date selector row -->
     <div class="mt-3 date-row align-items-center">
       <button id="prevDayBtn" class="btn btn-sm btn-outline-secondary" type="button" title="Previous day">◀ Prev</button>
 
-      <select id="dateSelect" class="form-select form-select-sm date-select" aria-label="Select date" style="min-width:160px;">
+      <select id="dateSelect" class="form-select form-select-sm date-select" aria-label="Select date">
         {% for d in v.daily.keys() %}
           <option value="{{ d }}">{{ d }}</option>
         {% endfor %}
@@ -235,42 +373,30 @@
                       <th>Gain (5 min)</th>
                       <th>Hourly Gain</th>
                       <th>24h Gain ⓘ</th>
+                      <th>Change 24h vs prev day (%)</th>
                       <th>Projected (min) views</th>
                       <th>Compare diff</th>
                       <th>Likes Δ</th>
-                      <th>Prediction</th>
                       <th>Engagement (%)</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {% set _prev = namespace(val=None) %}
+                    {# rows may have variable length. Access by index with fallbacks so older shapes won't break #}
                     {% for row in rows %}
                       {% set ts = row[0] if row|length > 0 else None %}
                       {% set views = row[1] if row|length > 1 else None %}
                       {% set gain5 = row[2] if row|length > 2 else None %}
                       {% set hourly_gain = row[3] if row|length > 3 else None %}
                       {% set gain24 = row[4] if row|length > 4 else None %}
+                      {% set pct24 = row[5] if row|length > 5 else None %}
                       {% set projected = row[6] if row|length > 6 else None %}
                       {% set comp_diff = row[7] if row|length > 7 else None %}
-                      {% set likes_delta = row[9] if row|length > 9 else None %}
-                      {% set prediction = row[10] if row|length > 10 else None %}
+                      {% set likes = row[9] if row|length > 9 else None %}
                       {% set engagement = row[11] if row|length > 11 else None %}
-
-                      {% set pred_class = "pred-neutral" %}
-                      {% if prediction is not none and _prev.val is not none %}
-                        {% if prediction > _prev.val %}
-                          {% set pred_class = "pred-pos" %}
-                        {% elif prediction < _prev.val %}
-                          {% set pred_class = "pred-neg" %}
-                        {% else %}
-                          {% set pred_class = "pred-neutral" %}
-                        {% endif %}
-                      {% endif %}
-
-                      <tr data-ts="{{ ts }}">
+                      <tr>
                         <td class="mono">{{ ts }}</td>
 
-                        <td class="mono table-views">
+                        <td class="mono num-views">
                           {% if views is none %}—{% else %}{{ "{:,}".format(views) }}{% endif %}
                         </td>
 
@@ -293,6 +419,13 @@
                         </td>
 
                         <td>
+                          {% if pct24 is none %}<span class="gain-null">—</span>
+                          {% elif pct24 > 0 %}<span class="num-pct-pos">+{{ ('{:.2f}'.format(pct24)) }}%</span>
+                          {% elif pct24 < 0 %}<span class="num-pct-neg">{{ ('{:.2f}'.format(pct24)) }}%</span>
+                          {% else %}<span>0.00%</span>{% endif %}
+                        </td>
+
+                        <td>
                           {% if projected is none %}<span class="gain-null">—</span>
                           {% else %}<span class="num-projected mono">{{ "{:,}".format(projected) }}</span>{% endif %}
                         </td>
@@ -304,14 +437,9 @@
                         </td>
 
                         <td class="mono">
-                          {% if likes_delta is none %}<span class="gain-null">—</span>
-                          {% elif likes_delta >= 0 %}<span class="num-views">+{{ "{:,}".format(likes_delta) }}</span>
-                          {% else %}<span class="gain-neg">{{ "{:,}".format(likes_delta) }}</span>{% endif %}
-                        </td>
-
-                        <td class="mono {{ pred_class }}">
-                          {% if prediction is none %}<span class="gain-null">—</span>
-                          {% else %}{{ "{:,}".format(prediction) }}{% endif %}
+                          {% if likes is none %}<span class="gain-null">—</span>
+                          {% elif likes >= 0 %}<span class="num-likes">+{{ "{:,}".format(likes) }}</span>
+                          {% else %}<span class="gain-neg">{{ "{:,}".format(likes) }}</span>{% endif %}
                         </td>
 
                         <td>
@@ -319,8 +447,6 @@
                           {% else %}<span class="num-eng">{{ ('{:.3f}'.format(engagement)) }}%</span>{% endif %}
                         </td>
                       </tr>
-
-                      {% set _prev.val = prediction %}
                     {% endfor %}
                   </tbody>
                 </table>
@@ -338,7 +464,8 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
   (function(){
-    /* UI helpers (date select etc) - same logic as before */
+    /* Date selector + prev/next + keyboard arrows */
+    /* Date selector, prev/next and other UI logic (unchanged) */
     const dateSelect = document.getElementById('dateSelect');
     const prevBtn = document.getElementById('prevDayBtn');
     const nextBtn = document.getElementById('nextDayBtn');
@@ -359,13 +486,35 @@
         setTimeout(()=> block.scrollIntoView({behavior:'smooth', block:'start'}), 60);
       }
     }
-    if (dateSelect && dateSelect.options.length) showDate(dateSelect.options[0].value);
-    if (dateSelect) dateSelect.addEventListener('change', (e) => showDate(e.target.value));
-    if (prevBtn) prevBtn.addEventListener('click', () => { const idx = dates.indexOf(dateSelect.value); if (idx === -1) return; const nextIdx = Math.min(dates.length - 1, idx + 1); showDate(dates[nextIdx]); });
-    if (nextBtn) nextBtn.addEventListener('click', () => { const idx = dates.indexOf(dateSelect.value); if (idx === -1) return; const nextIdx = Math.max(0, idx - 1); showDate(dates[nextIdx]); });
-    document.addEventListener('keydown', (e) => { if (e.key === 'ArrowLeft') prevBtn && prevBtn.click(); if (e.key === 'ArrowRight') nextBtn && nextBtn.click(); });
 
-    /* time-ago helper (for live badge text) */
+    if (dateSelect && dateSelect.options.length) {
+      showDate(dateSelect.options[0].value);
+    }
+
+    if (dateSelect) dateSelect.addEventListener('change', (e) => showDate(e.target.value));
+    if (prevBtn) prevBtn.addEventListener('click', () => {
+      const idx = dates.indexOf(dateSelect.value);
+      if (idx === -1) return;
+      const nextIdx = Math.min(dates.length - 1, idx + 1);
+      showDate(dates[nextIdx]);
+    });
+    if (nextBtn) nextBtn.addEventListener('click', () => {
+      const idx = dates.indexOf(dateSelect.value);
+      if (idx === -1) return;
+      const nextIdx = Math.max(0, idx - 1);
+      showDate(dates[nextIdx]);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowLeft') prevBtn && prevBtn.click();
+      if (e.key === 'ArrowRight') nextBtn && nextBtn.click();
+    });
+    if (dateSelect) {
+      dateSelect.addEventListener('focus', () => dateSelect.size = Math.min(8, dates.length));
+      dateSelect.addEventListener('blur', () => dateSelect.size = 1);
+    }
+
+    /* Live badge updater */
+    /* Live badge time-ago formatter (used both for initial render and updates) */
     function timeAgoText(iso) {
       if (!iso) return '—';
       const then = new Date(iso);
@@ -373,27 +522,225 @@
       const diff = Math.floor((now - then) / 1000);
       if (diff < 5) return 'just now';
       if (diff < 60) return diff + 's ago';
-      if (diff < 3600) { const m = Math.floor(diff/60); const s = diff % 60; return m + 'm ' + s + 's ago'; }
-      if (diff < 86400) { const h = Math.floor(diff/3600); const mm = Math.floor((diff%3600)/60); return h + 'h ' + mm + 'm ago'; }
-      const days = Math.floor(diff/86400); return days + 'd ago';
+      if (diff < 3600) {
+        const m = Math.floor(diff/60);
+        const s = diff % 60;
+        return m + 'm ' + s + 's ago';
+      }
+      if (diff < 86400) {
+        const h = Math.floor(diff/3600);
+        const mm = Math.floor((diff%3600)/60);
+        return h + 'h ' + mm + 'm ago';
+      }
+      const days = Math.floor(diff/86400);
+      return days + 'd ago';
     }
 
+    /* Initialize live-badge updater (refresh time text every 10s) */
     (function(){
       const liveBadge = document.getElementById('liveBadge');
       const liveText = document.getElementById('liveText');
       if (!liveBadge || !liveText) return;
-      function refreshBadgeTextOnce() {
+      function timeAgoText(iso) {
+        const then = new Date(iso);
+        const now = new Date();
+        const diff = Math.floor((now - then) / 1000);
+        if (diff < 5) return 'just now';
+        if (diff < 60) return diff + 's ago';
+        if (diff < 3600) return Math.floor(diff/60) + 'm ' + (diff%60) + 's ago';
+        if (diff < 86400) return Math.floor(diff/3600) + 'h ' + Math.floor((diff%3600)/60) + 'm ago';
+        return Math.floor(diff/86400) + 'd ago';
+      }
+      function refresh() {
+      function refreshBadgeText() {
         const iso = liveBadge.dataset.latestIso;
         const views = parseInt(liveBadge.dataset.views || '0', 10);
         const ago = timeAgoText(iso);
+        liveText.textContent = 'Updated ' + ago + ' • ' + views.toLocaleString() + ' views';
+        // If the latest timestamp is very recent, display "Updated just now" to avoid flicker
         liveText.textContent = 'Updated ' + ago + ' • ' + (Number.isFinite(views) ? views.toLocaleString() : '—') + ' views';
       }
-      refreshBadgeTextOnce();
+      refresh();
+      setInterval(refresh, 10 * 1000);
+      refreshBadgeText();
+      setInterval(refreshBadgeText, 10 * 1000);
     })();
 
-    /* kept helpers for inline DOM updates (no network calls here) */
-    function formatNum(n) { return (n === null || n === undefined || n === "") ? "—" : Number(n).toLocaleString(); }
-    function formatMaybeSigned(n) { if (n === null || n === undefined || n === "") return "—"; try { n = Number(n); return (n >= 0 ? "+" : "") + n.toLocaleString(); } catch(e) { return String(n); } }
+    /* Auto-refresh logic:
+       - Global: fallback full reload every 5s
+       - On this page: partial JSON refresh every 5s that updates the live-badge and latest views in-place */
+    /* Auto-refresh / partial JSON polling (safe, non-overlapping) */
+    (function(){
+      const AUTO_MS = 5 * 1000;
+      const POLL_MS = 5 * 1000;             // JSON poll interval for partial updates
+      const FULL_RELOAD_MS = 5 * 60 * 1000; // long fallback full reload (5 minutes)
+      const liveBadge = document.getElementById('liveBadge');
+      if (!liveBadge) return;
+
+      // start a global full-reload timer
+      let fullReloadTimer = setInterval(() => {
+        // only reload when page is visible to avoid background reloads
+      const videoId = "{{ v.video_id }}";
+      let lastKnownIso = liveBadge.dataset.latestIso || null;
+      let lastKnownViews = Number(liveBadge.dataset.views || ({{ v.latest_views or 0 }}));
+      let controller = null;
+      let fullReloadTimer = null;
+
+      // Start a long-interval full page reload fallback (kept intentionally long)
+      fullReloadTimer = setInterval(() => {
+        if (document.visibilityState === 'visible') {
+          // only reload if nothing changed for a long time; we still keep partial updates active
+          // (this is a fallback for weird edgecases)
+          location.reload();
+        }
+      }, AUTO_MS);
+      }, FULL_RELOAD_MS);
+
+      const liveBadge = document.getElementById('liveBadge');
+      if (!liveBadge) return;
+      async function refreshPartial(){
+        // Abort previous request if still running
+        if (controller) {
+          try { controller.abort(); } catch(e) {}
+        }
+        controller = new AbortController();
+
+      // If on video page (we have liveBadge) — stop full reload and do partial updates
+      clearInterval(fullReloadTimer);
+        try {
+          const res = await fetch(`/video/${encodeURIComponent(videoId)}/json`, {
+            credentials: 'same-origin',
+            cache: 'no-store',
+            headers: { 'Accept': 'application/json' },
+            signal: controller.signal,
+          });
+
+      const videoId = "{{ v.video_id }}";
+          if (!res.ok) {
+            // don't spam with reloads — just log and return
+            // console.warn('Partial refresh: non-OK response', res.status);
+            return;
+          }
+
+      async function refreshPartial(){
+        try {
+          const res = await fetch(`/video/${encodeURIComponent(videoId)}/json`, { credentials: 'same-origin' });
+          if (!res.ok) return;
+          const j = await res.json();
+
+          if (j.latest_ts_iso) liveBadge.dataset.latestIso = j.latest_ts_iso;
+          if (j.latest_views != null) liveBadge.dataset.views = String(j.latest_views);
+          // Validate fields
+          const newIso = j.latest_ts_iso || null;
+          const newViewsRaw = j.latest_views;
+          const newViews = (typeof newViewsRaw === 'number') ? newViewsRaw : (newViewsRaw ? Number(newViewsRaw) : null);
+
+          // update badge text immediately
+          const liveText = document.getElementById('liveText');
+          if (liveText && j.latest_views != null) {
+            liveText.textContent = 'Updated just now • ' + Number(j.latest_views).toLocaleString() + ' views';
+          // Update dataset and DOM only when change detected to avoid unnecessary DOM thrash
+          if (newIso && newIso !== lastKnownIso) {
+            liveBadge.dataset.latestIso = newIso;
+            lastKnownIso = newIso;
+          }
+
+          // update large stat(s)
+          const statEls = document.querySelectorAll('.stat-large.num-views, .num-views');
+          statEls.forEach(el => {
+            if (j.latest_views != null) el.textContent = Number(j.latest_views).toLocaleString();
+          });
+          if (newViews != null && newViews !== lastKnownViews) {
+            liveBadge.dataset.views = String(newViews);
+            lastKnownViews = newViews;
+
+            // update large stat elements (there are a few selectors in template)
+            const statEls = document.querySelectorAll('.stat-large.num-views, .num-views');
+            statEls.forEach(el => {
+              // only update text if different (avoid layout thrash)
+              const txt = Number(newViews).toLocaleString();
+              if (el.textContent !== txt) el.textContent = txt;
+            });
+
+            // update liveText immediately for snappy feedback (will be overwritten by time-ago updater)
+            const liveTextEl = document.getElementById('liveText');
+            if (liveTextEl) liveTextEl.textContent = 'Updated just now • ' + Number(newViews).toLocaleString() + ' views';
+          } else {
+            // If views unchanged but iso updated (e.g., same views but new timestamp), still update timestamp area below
+            const liveTextEl = document.getElementById('liveText');
+            if (liveTextEl && newIso) {
+              const ago = timeAgoText(newIso);
+              // keep same views shown
+              const viewsShown = (newViews != null) ? Number(newViews).toLocaleString() : (lastKnownViews != null ? Number(lastKnownViews).toLocaleString() : '—');
+              liveTextEl.textContent = 'Updated ' + ago + ' • ' + viewsShown + ' views';
+            }
+          }
+
+          // update IST timestamp line (if present)
+          const liveSub = document.getElementById('liveSub');
+          if (liveSub && j.latest_ts_ist) {
+            liveSub.textContent = 'IST: ' + j.latest_ts_ist;
+          // Update IST timestamp line
+          if (j.latest_ts_ist) {
+            const liveSub = document.getElementById('liveSub');
+            if (liveSub) {
+              const newTxt = 'IST: ' + j.latest_ts_ist;
+              if (liveSub.textContent !== newTxt) liveSub.textContent = newTxt;
+            }
+          }
+
+          // thumbnail change: update src (best-effort)
+          // Thumbnail change (best-effort): if server says thumbnail_changed, update src
+          if (j.thumbnail_changed && j.thumbnail_url) {
+            const thumb = document.querySelector('.video-thumb');
+            if (thumb) thumb.src = j.thumbnail_url;
+            if (thumb && thumb.src !== j.thumbnail_url) {
+              thumb.src = j.thumbnail_url;
+            }
+            // thumbnail preview (if present)
+            const preview = document.querySelector('.thumb-preview');
+            if (preview && preview.src !== j.thumbnail_url) {
+              preview.src = j.thumbnail_url;
+            }
+          }
+
+        } catch (err) {
+          // Abort will throw when controller.abort() is called — ignore that
+          if (err && err.name === 'AbortError') return;
+          console.error("refreshPartial error:", err);
+        } finally {
+          // clear controller reference to allow GC and next request to create new one
+          controller = null;
+        }
+      }
+
+      // initial partial refresh + scheduled updates
+      // Kick off polling, with immediate run followed by interval
+      refreshPartial();
+      setInterval(refreshPartial, AUTO_MS);
+      const pollInterval = setInterval(() => {
+        if (document.visibilityState === 'visible') refreshPartial();
+      }, POLL_MS);
+
+      // Keep page visible/hidden behavior friendly: pause polling when in background
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') {
+          // we keep the fallback full reload running, but can also abort any in-flight fetch
+          if (controller) try { controller.abort(); } catch(e){}
+        } else {
+          // do an immediate refresh when the user comes back
+          refreshPartial();
+        }
+      });
+
+      // Clean up on unload (not required but tidy)
+      window.addEventListener('beforeunload', () => {
+        if (controller) try { controller.abort(); } catch(e){}
+        clearInterval(pollInterval);
+        clearInterval(fullReloadTimer);
+      });
+
+    })();
 
   })();
 </script>
