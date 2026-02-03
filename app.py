@@ -2422,6 +2422,14 @@ def video_detail_json(video_id):
     })
 
 
+@app.post("/video/<video_id>/refresh")
+@login_required
+def refresh_video_rows(video_id):
+    invalidate_video_cache(video_id)
+    flash("Rows refreshed from the database.", "success")
+    return redirect(url_for("video_detail", video_id=video_id))
+
+
 @app.post("/add_video")
 @login_required
 def add_video():
