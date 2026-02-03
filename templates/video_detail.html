@@ -327,7 +327,9 @@
     </div>
 
     <div class="d-flex align-items-center gap-2 mb-2">
-      <button id="refreshRowsBtn" class="btn btn-sm btn-outline-primary" type="button">Refresh rows</button>
+      <form method="POST" action="{{ url_for('refresh_video_rows', video_id=v.video_id) }}">
+        <button class="btn btn-sm btn-outline-primary" type="submit">Refresh rows</button>
+      </form>
       <div class="small-note muted">Manually fetch the latest rows from the database.</div>
     </div>
 
@@ -455,44 +457,6 @@
     const daysContainer = document.getElementById('daysContainer');
     let lastRowRefreshIso = lastKnownIso;
     let rowRefreshQueued = false;
-    let rowsRefreshInFlight = false;
-    const refreshRowsBtn = document.getElementById('refreshRowsBtn');
-
-    async function refreshTableRows({silent = false} = {}) {
-      if (!daysContainer || rowsRefreshInFlight) return;
-      rowsRefreshInFlight = true;
-      if (refreshRowsBtn && !silent) refreshRowsBtn.disabled = true;
-      try {
-        const res = await fetch(`/video/${encodeURIComponent(videoId)}/rows`, {
-          credentials: 'same-origin',
-          cache: 'no-store',
-          headers: { 'Accept': 'application/json' }
-        });
-        if (!res.ok) return;
-        const j = await res.json();
-        if (!j || !j.days_html) return;
-        const currentDate = dateSelect ? dateSelect.value : null;
-        daysContainer.innerHTML = j.days_html;
-        dates = Array.isArray(j.dates) ? j.dates : [];
-        rebuildDateOptions(dates);
-        rebuildDayBlocks();
-        const nextDate = (currentDate && dates.includes(currentDate)) ? currentDate : (dates[0] || null);
-        if (nextDate) showDate(nextDate);
-        if (j.latest_ts_iso) {
-          lastRowRefreshIso = j.latest_ts_iso;
-        }
-      } catch (err) {
-        console.error('row refresh error:', err);
-      } finally {
-        rowsRefreshInFlight = false;
-        rowRefreshQueued = false;
-        if (refreshRowsBtn && !silent) refreshRowsBtn.disabled = false;
-      }
-    }
-
-    if (refreshRowsBtn) {
-      refreshRowsBtn.addEventListener('click', () => refreshTableRows());
-    }
 
     function formatViews(value) {
       return Number.isFinite(value) ? value.toLocaleString() : '—';
@@ -538,7 +502,7 @@
             rowRefreshQueued = true;
             lastRowRefreshIso = j.latest_ts_iso;
             setTimeout(() => {
-              refreshTableRows({silent: true});
+              window.location.reload();
             }, 250);
           }
         }
