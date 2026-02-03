@@ -156,7 +156,10 @@
           {% if v.latest_ts_iso and v.latest_views is not none %}
             <div class="live-badge" id="liveBadge" data-latest-iso="{{ v.latest_ts_iso }}" data-views="{{ v.latest_views|int }}">
               <span class="dot" aria-hidden="true"></span>
-              <span id="liveText">Updated just now • <span class="num-views">{{ "{:,}".format(v.latest_views) }}</span> views</span>
+              <span>
+                <span id="liveTextPrefix">Updated just now •</span>
+                <span id="liveViews" class="num-views" data-live-views>{{ "{:,}".format(v.latest_views) }}</span> views
+              </span>
             </div>
             <div class="live-sub" id="liveSub">IST: {% if v.latest_ts_ist %}{{ v.latest_ts_ist }}{% else %}—{% endif %}</div>
           {% else %}
@@ -191,7 +194,7 @@
       <div class="card p-3 mb-3">
         <div class="d-flex justify-content-between align-items-start">
           <div>
-            <div class="stat-large num-views">{{ "{:,}".format(v.latest_views or 0) }}</div>
+            <div class="stat-large num-views" data-live-views>{{ "{:,}".format(v.latest_views or 0) }}</div>
             <div class="stat-sub">Latest total views</div>
           </div>
           <div class="text-end">
@@ -453,8 +456,6 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
   (function(){
-    /* Date selector + prev/next + keyboard arrows */
-    /* Date selector, prev/next and other UI logic (unchanged) */
     const dateSelect = document.getElementById('dateSelect');
     const prevBtn = document.getElementById('prevDayBtn');
     const nextBtn = document.getElementById('nextDayBtn');
@@ -502,8 +503,6 @@
       dateSelect.addEventListener('blur', () => dateSelect.size = 1);
     }
 
-    /* Live badge updater */
-    /* Live badge time-ago formatter (used both for initial render and updates) */
     function timeAgoText(iso) {
       if (!iso) return '—';
       const then = new Date(iso);
@@ -521,214 +520,116 @@
         const mm = Math.floor((diff%3600)/60);
         return h + 'h ' + mm + 'm ago';
       }
-      const days = Math.floor(diff/86400);
-      return days + 'd ago';
+      return Math.floor(diff/86400) + 'd ago';
     }
 
-    /* Initialize live-badge updater (refresh time text every 10s) */
-    (function(){
-      const liveBadge = document.getElementById('liveBadge');
-      const liveText = document.getElementById('liveText');
-      if (!liveBadge || !liveText) return;
-      function timeAgoText(iso) {
-        const then = new Date(iso);
-        const now = new Date();
-        const diff = Math.floor((now - then) / 1000);
-        if (diff < 5) return 'just now';
-        if (diff < 60) return diff + 's ago';
-        if (diff < 3600) return Math.floor(diff/60) + 'm ' + (diff%60) + 's ago';
-        if (diff < 86400) return Math.floor(diff/3600) + 'h ' + Math.floor((diff%3600)/60) + 'm ago';
-        return Math.floor(diff/86400) + 'd ago';
+    const liveBadge = document.getElementById('liveBadge');
+    if (!liveBadge) return;
+
+    const videoId = "{{ v.video_id }}";
+    let lastKnownIso = liveBadge.dataset.latestIso || null;
+    let lastKnownViews = Number(liveBadge.dataset.views || ({{ v.latest_views or 0 }}));
+    let controller = null;
+    const POLL_MS = 5 * 1000;
+
+    const liveTextPrefix = document.getElementById('liveTextPrefix');
+    const liveViewsEl = document.getElementById('liveViews');
+    const liveSub = document.getElementById('liveSub');
+
+    function formatViews(value) {
+      return Number.isFinite(value) ? value.toLocaleString() : '—';
+    }
+
+    function updateTimeAgo() {
+      if (liveTextPrefix) {
+        liveTextPrefix.textContent = `Updated ${timeAgoText(lastKnownIso)} •`;
       }
-      function refresh() {
-      function refreshBadgeText() {
-        const iso = liveBadge.dataset.latestIso;
-        const views = parseInt(liveBadge.dataset.views || '0', 10);
-        const ago = timeAgoText(iso);
-        liveText.textContent = 'Updated ' + ago + ' • ' + (Number.isFinite(views) ? views.toLocaleString() : '—') + ' views';
+      if (liveViewsEl) {
+        liveViewsEl.textContent = formatViews(lastKnownViews);
       }
-      refresh();
-      setInterval(refresh, 10 * 1000);
-      refreshBadgeText();
-      setInterval(refreshBadgeText, 10 * 1000);
-    })();
+    }
 
-    /* Auto-refresh logic:
-       - Global: fallback full reload every 5s
-       - On this page: partial JSON refresh every 5s that updates the live-badge and latest views in-place */
-    /* Auto-refresh / partial JSON polling (safe, non-overlapping) */
-    (function(){
-      const AUTO_MS = 5 * 1000;
-      const POLL_MS = 5 * 1000;             // JSON poll interval for partial updates
-      const FULL_RELOAD_MS = 5 * 60 * 1000; // long fallback full reload (5 minutes)
-      const liveBadge = document.getElementById('liveBadge');
-      if (!liveBadge) return;
+    function updateViews(value) {
+      lastKnownViews = value;
+      document.querySelectorAll('[data-live-views]').forEach((el) => {
+        const nextText = formatViews(value);
+        if (el.textContent !== nextText) el.textContent = nextText;
+      });
+    }
 
-      // start a global full-reload timer
-      let fullReloadTimer = setInterval(() => {
-        // only reload when page is visible to avoid background reloads
-      const videoId = "{{ v.video_id }}";
-      let lastKnownIso = liveBadge.dataset.latestIso || null;
-      let lastKnownViews = Number(liveBadge.dataset.views || ({{ v.latest_views or 0 }}));
-      let controller = null;
-      let fullReloadTimer = null;
+    async function poll() {
+      if (controller) {
+        try { controller.abort(); } catch (e) {}
+      }
+      controller = new AbortController();
+      try {
+        const res = await fetch(`/video/${encodeURIComponent(videoId)}/json`, {
+          credentials: 'same-origin',
+          cache: 'no-store',
+          headers: { 'Accept': 'application/json' },
+          signal: controller.signal
+        });
+        if (!res.ok) return;
+        const j = await res.json();
+        if (!j) return;
 
-      // Start a long-interval full page reload fallback (kept intentionally long)
-      fullReloadTimer = setInterval(() => {
-        if (document.visibilityState === 'visible') {
-          // only reload if nothing changed for a long time; we still keep partial updates active
-          // (this is a fallback for weird edgecases)
-          location.reload();
+        if (j.latest_ts_iso && j.latest_ts_iso !== lastKnownIso) {
+          lastKnownIso = j.latest_ts_iso;
+          liveBadge.dataset.latestIso = j.latest_ts_iso;
         }
-      }, AUTO_MS);
-      }, FULL_RELOAD_MS);
 
-      const liveBadge = document.getElementById('liveBadge');
-      if (!liveBadge) return;
-      async function refreshPartial(){
-        // Abort previous request if still running
-        if (controller) {
-          try { controller.abort(); } catch(e) {}
-        }
-        controller = new AbortController();
-
-      // If on video page (we have liveBadge) — stop full reload and do partial updates
-      clearInterval(fullReloadTimer);
-        try {
-          const res = await fetch(`/video/${encodeURIComponent(videoId)}/json`, {
-            credentials: 'same-origin',
-            cache: 'no-store',
-            headers: { 'Accept': 'application/json' },
-            signal: controller.signal,
-          });
-
-      const videoId = "{{ v.video_id }}";
-          if (!res.ok) {
-            // don't spam with reloads — just log and return
-            // console.warn('Partial refresh: non-OK response', res.status);
-            return;
-          }
-
-      async function refreshPartial(){
-        try {
-          const res = await fetch(`/video/${encodeURIComponent(videoId)}/json`, { credentials: 'same-origin' });
-          if (!res.ok) return;
-          const j = await res.json();
-
-          if (j.latest_ts_iso) liveBadge.dataset.latestIso = j.latest_ts_iso;
-          if (j.latest_views != null) liveBadge.dataset.views = String(j.latest_views);
-          // Validate fields
-          const newIso = j.latest_ts_iso || null;
-          const newViewsRaw = j.latest_views;
-          const newViews = (typeof newViewsRaw === 'number') ? newViewsRaw : (newViewsRaw ? Number(newViewsRaw) : null);
-
-          // update badge text immediately
-          const liveText = document.getElementById('liveText');
-          if (liveText && j.latest_views != null) {
-            liveText.textContent = 'Updated just now • ' + Number(j.latest_views).toLocaleString() + ' views';
-          // Update dataset and DOM only when change detected to avoid unnecessary DOM thrash
-          if (newIso && newIso !== lastKnownIso) {
-            liveBadge.dataset.latestIso = newIso;
-            lastKnownIso = newIso;
-          }
-
-          // update large stat(s)
-          const statEls = document.querySelectorAll('.stat-large.num-views, .num-views');
-          statEls.forEach(el => {
-            if (j.latest_views != null) el.textContent = Number(j.latest_views).toLocaleString();
-          });
-          if (newViews != null && newViews !== lastKnownViews) {
+        if (j.latest_views != null) {
+          const newViews = Number(j.latest_views);
+          if (!Number.isNaN(newViews) && newViews !== lastKnownViews) {
             liveBadge.dataset.views = String(newViews);
-            lastKnownViews = newViews;
-
-            // update large stat elements (there are a few selectors in template)
-            const statEls = document.querySelectorAll('.stat-large.num-views, .num-views');
-            statEls.forEach(el => {
-              // only update text if different (avoid layout thrash)
-              const txt = Number(newViews).toLocaleString();
-              if (el.textContent !== txt) el.textContent = txt;
-            });
-
-            // update liveText immediately for snappy feedback (will be overwritten by time-ago updater)
-            const liveTextEl = document.getElementById('liveText');
-            if (liveTextEl) liveTextEl.textContent = 'Updated just now • ' + Number(newViews).toLocaleString() + ' views';
-          } else {
-            // If views unchanged but iso updated (e.g., same views but new timestamp), still update timestamp area below
-            const liveTextEl = document.getElementById('liveText');
-            if (liveTextEl && newIso) {
-              const ago = timeAgoText(newIso);
-              // keep same views shown
-              const viewsShown = (newViews != null) ? Number(newViews).toLocaleString() : (lastKnownViews != null ? Number(lastKnownViews).toLocaleString() : '—');
-              liveTextEl.textContent = 'Updated ' + ago + ' • ' + viewsShown + ' views';
-            }
+            updateViews(newViews);
           }
-
-          // update IST timestamp line (if present)
-          const liveSub = document.getElementById('liveSub');
-          if (liveSub && j.latest_ts_ist) {
-            liveSub.textContent = 'IST: ' + j.latest_ts_ist;
-          // Update IST timestamp line
-          if (j.latest_ts_ist) {
-            const liveSub = document.getElementById('liveSub');
-            if (liveSub) {
-              const newTxt = 'IST: ' + j.latest_ts_ist;
-              if (liveSub.textContent !== newTxt) liveSub.textContent = newTxt;
-            }
-          }
-
-          // thumbnail change: update src (best-effort)
-          // Thumbnail change (best-effort): if server says thumbnail_changed, update src
-          if (j.thumbnail_changed && j.thumbnail_url) {
-            const thumb = document.querySelector('.video-thumb');
-            if (thumb) thumb.src = j.thumbnail_url;
-            if (thumb && thumb.src !== j.thumbnail_url) {
-              thumb.src = j.thumbnail_url;
-            }
-            // thumbnail preview (if present)
-            const preview = document.querySelector('.thumb-preview');
-            if (preview && preview.src !== j.thumbnail_url) {
-              preview.src = j.thumbnail_url;
-            }
-          }
-
-        } catch (err) {
-          // Abort will throw when controller.abort() is called — ignore that
-          if (err && err.name === 'AbortError') return;
-          console.error("refreshPartial error:", err);
-        } finally {
-          // clear controller reference to allow GC and next request to create new one
-          controller = null;
         }
+
+        if (liveSub && j.latest_ts_ist) {
+          const newTxt = `IST: ${j.latest_ts_ist}`;
+          if (liveSub.textContent !== newTxt) liveSub.textContent = newTxt;
+        }
+
+        if (j.thumbnail_changed && j.thumbnail_url) {
+          const thumb = document.querySelector('.video-thumb');
+          if (thumb && thumb.src !== j.thumbnail_url) thumb.src = j.thumbnail_url;
+          const preview = document.querySelector('.thumb-preview');
+          if (preview && preview.src !== j.thumbnail_url) preview.src = j.thumbnail_url;
+        }
+      } catch (err) {
+        if (err && err.name === 'AbortError') return;
+        console.error('video poll error:', err);
+      } finally {
+        controller = null;
+        updateTimeAgo();
       }
+    }
 
-      // initial partial refresh + scheduled updates
-      // Kick off polling, with immediate run followed by interval
-      refreshPartial();
-      setInterval(refreshPartial, AUTO_MS);
-      const pollInterval = setInterval(() => {
-        if (document.visibilityState === 'visible') refreshPartial();
-      }, POLL_MS);
+    updateTimeAgo();
+    const timeAgoInterval = setInterval(updateTimeAgo, 10 * 1000);
+    poll();
+    const pollInterval = setInterval(() => {
+      if (document.visibilityState === 'visible') poll();
+    }, POLL_MS);
 
-      // Keep page visible/hidden behavior friendly: pause polling when in background
-      document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'hidden') {
-          // we keep the fallback full reload running, but can also abort any in-flight fetch
-          if (controller) try { controller.abort(); } catch(e){}
-        } else {
-          // do an immediate refresh when the user comes back
-          refreshPartial();
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        if (controller) {
+          try { controller.abort(); } catch (e) {}
         }
-      });
+      } else {
+        poll();
+      }
+    });
 
-      // Clean up on unload (not required but tidy)
-      window.addEventListener('beforeunload', () => {
-        if (controller) try { controller.abort(); } catch(e){}
-        clearInterval(pollInterval);
-        clearInterval(fullReloadTimer);
-      });
-
-    })();
-
+    window.addEventListener('beforeunload', () => {
+      clearInterval(pollInterval);
+      clearInterval(timeAgoInterval);
+      if (controller) {
+        try { controller.abort(); } catch (e) {}
+      }
+    });
   })();
 </script>
 </body>
