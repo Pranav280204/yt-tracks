@@ -2429,6 +2429,22 @@ def refresh_video_rows(video_id):
     flash("Rows refreshed from the database.", "success")
     return redirect(url_for("video_detail", video_id=video_id))
 
+@app.get("/video/<video_id>/rows")
+@login_required
+def video_rows_json(video_id):
+    invalidate_video_cache(video_id)
+    info = build_video_display(video_id)
+    if info is None:
+        return jsonify({"error": "not found"}), 404
+    days_html = render_template("_video_day_blocks.html", daily=info["daily"])
+    dates = list(info["daily"].keys())
+    return jsonify({
+        "dates": dates,
+        "days_html": days_html,
+        "latest_ts_iso": info.get("latest_ts_iso"),
+        "latest_ts_ist": info.get("latest_ts_ist")
+    })
+
 
 @app.post("/add_video")
 @login_required
