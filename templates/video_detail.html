@@ -448,7 +448,7 @@
     let lastKnownIso = liveBadge.dataset.latestIso || null;
     let lastKnownViews = Number(liveBadge.dataset.views || ({{ v.latest_views or 0 }}));
     let controller = null;
-    const POLL_MS = 5 * 1000;
+    const POLL_MS = 1 * 1000;
 
     const liveTextPrefix = document.getElementById('liveTextPrefix');
     const liveViewsEl = document.getElementById('liveViews');

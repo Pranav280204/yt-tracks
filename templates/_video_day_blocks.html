@@ -11,12 +11,12 @@
                 <th>Total Views</th>
                 <th>Gain (5 min)</th>
                 <th>Hourly Gain</th>
-                <th>Prediction</th>
                 <th>24h Gain ⓘ</th>
                 <th>Change 24h vs prev day (%)</th>
                 <th>Projected (min) views</th>
                 <th>Compare diff</th>
                 <th>Likes Δ</th>
+                <th>Prediction</th>
                 <th>Engagement (%)</th>
               </tr>
             </thead>
@@ -54,12 +54,6 @@
                   </td>
 
                   <td>
-                    {% if prediction is none %}<span class="gain-null">—</span>
-                    {% elif prediction >= 0 %}<span class="num-likes">+{{ "{:,}".format(prediction) }}</span>
-                    {% else %}<span class="gain-neg">{{ "{:,}".format(prediction) }}</span>{% endif %}
-                  </td>
-
-                  <td>
                     {% if gain24 is none %}<span class="gain-null">—</span>
                     {% elif gain24 >= 0 %}<span class="gain-pos">+{{ "{:,}".format(gain24) }}</span>
                     {% else %}<span class="gain-neg">{{ "{:,}".format(gain24) }}</span>{% endif %}
@@ -87,6 +81,12 @@
                     {% if likes is none %}<span class="gain-null">—</span>
                     {% elif likes >= 0 %}<span class="num-likes">+{{ "{:,}".format(likes) }}</span>
                     {% else %}<span class="gain-neg">{{ "{:,}".format(likes) }}</span>{% endif %}
+                  </td>
+
+                  <td>
+                    {% if prediction is none %}<span class="gain-null">—</span>
+                    {% elif prediction >= 0 %}<span class="num-likes">+{{ "{:,}".format(prediction) }}</span>
+                    {% else %}<span class="gain-neg">{{ "{:,}".format(prediction) }}</span>{% endif %}
                   </td>
 
                   <td>
