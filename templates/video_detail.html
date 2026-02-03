@@ -542,6 +542,9 @@
     const liveTextPrefix = document.getElementById('liveTextPrefix');
     const liveViewsEl = document.getElementById('liveViews');
     const liveSub = document.getElementById('liveSub');
+    const daysContainer = document.getElementById('daysContainer');
+    let lastRowRefreshIso = lastKnownIso;
+    let rowRefreshQueued = false;
 
     function formatViews(value) {
       return Number.isFinite(value) ? value.toLocaleString() : '—';
@@ -583,6 +586,13 @@
         if (j.latest_ts_iso && j.latest_ts_iso !== lastKnownIso) {
           lastKnownIso = j.latest_ts_iso;
           liveBadge.dataset.latestIso = j.latest_ts_iso;
+          if (daysContainer && !rowRefreshQueued && lastRowRefreshIso !== j.latest_ts_iso) {
+            rowRefreshQueued = true;
+            lastRowRefreshIso = j.latest_ts_iso;
+            setTimeout(() => {
+              window.location.reload();
+            }, 250);
+          }
         }
 
         if (j.latest_views != null) {
