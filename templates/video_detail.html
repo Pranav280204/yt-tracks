@@ -350,6 +350,7 @@
     </div>
 
     <!-- Data tables (each day wrapped in .day-block) -->
+    {% set daily = v.daily %}
     <div id="daysContainer">
       {% include "_video_day_blocks.html" with daily=v.daily %}
       {% include "_video_day_blocks.html" %}
