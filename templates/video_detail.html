@@ -371,6 +371,7 @@
     const dates = Array.from(dateSelect ? dateSelect.options : []).map(opt => opt.value);
     const refreshBtn = document.getElementById('refreshDayBtn');
     const daysContainer = document.getElementById('daysContainer');
+    let dayRefreshInFlight = false;
 
     function showDate(date) {
       dayBlocks.forEach(b => b.classList.remove('active'));
@@ -468,8 +469,10 @@
 
     async function refreshCurrentDay(reason = 'auto') {
       if (!dateSelect || !daysContainer) return;
+      if (dayRefreshInFlight) return;
       const selectedDate = dateSelect.value;
       if (!selectedDate) return;
+      dayRefreshInFlight = true;
       if (refreshBtn) {
         refreshBtn.disabled = true;
         refreshBtn.textContent = reason === 'manual' ? 'Refreshing…' : 'Refreshing…';
@@ -497,6 +500,7 @@
       } catch (err) {
         console.error('day refresh error:', err);
       } finally {
+        dayRefreshInFlight = false;
         if (refreshBtn) {
           refreshBtn.disabled = false;
           refreshBtn.textContent = 'Refresh table';
