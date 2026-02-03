@@ -2194,6 +2194,7 @@ def home():
         latest = latest_samples.get(vid)
         latest_views = latest["views"] if latest else None
         latest_ts = latest["ts_utc"] if latest else None
+        latest_ts_ist = latest_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if latest_ts else None
 
         vids.append({
             "video_id": vid,
@@ -2203,7 +2204,8 @@ def home():
             "is_tracking": bool(v["is_tracking"]),
             "channel_total_cached": channel_total,
             "latest_views": latest_views,
-            "latest_ts": latest_ts
+            "latest_ts": latest_ts,
+            "latest_ts_ist": latest_ts_ist
         })
 
     t_end = time.time()
@@ -2212,6 +2214,32 @@ def home():
              t_db_videos - t0, t_ch_map - t_db_videos, t_ch_totals - t_ch_map, t_latest_samples - t_ch_totals, t_end - t0)
 
     return render_template("home.html", videos=vids)
+
+
+@app.get("/home/json")
+@login_required
+def home_json():
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("SELECT video_id FROM video_list ORDER BY name")
+        video_rows = cur.fetchall()
+
+    video_ids = [v["video_id"] for v in video_rows]
+    latest_samples = get_latest_sample_per_video(video_ids) if video_ids else {}
+
+    payload = []
+    for vid in video_ids:
+        latest = latest_samples.get(vid)
+        latest_views = latest["views"] if latest else None
+        latest_ts = latest["ts_utc"] if latest else None
+        latest_ts_ist = latest_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if latest_ts else None
+        payload.append({
+            "video_id": vid,
+            "latest_views": latest_views,
+            "latest_ts_ist": latest_ts_ist
+        })
+
+    return jsonify({"videos": payload})
 
 @app.get("/mrbeast_sum")
 @login_required

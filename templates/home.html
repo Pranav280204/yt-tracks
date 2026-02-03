@@ -70,7 +70,7 @@
   {% else %}
     <div class="grid">
       {% for v in videos %}
-        <div class="card-thumb">
+        <div class="card-thumb" data-video-id="{{ v.video_id }}">
           {% if v.channel_total_cached is not none %}
             <div class="badge-channel">{{ "{:,}".format(v.channel_total_cached) }}</div>
           {% endif %}
@@ -88,6 +88,12 @@
                   {% endif %}
                 </div>
               </div>
+              <div class="muted small mt-1" data-live-views>
+                Views: {% if v.latest_views is none %}—{% else %}{{ "{:,}".format(v.latest_views) }}{% endif %}
+              </div>
+              <div class="muted small" data-live-updated>
+                Updated: {% if v.latest_ts_ist %}{{ v.latest_ts_ist }}{% else %}—{% endif %}
+              </div>
             </div>
           </a>
           <!-- ACTIONS: Stats / Details -->
@@ -103,5 +109,79 @@
   <footer class="mt-4 muted text-center">Stored in PostgreSQL • UTC in DB, shown in IST</footer>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+  (function(){
+    const cards = new Map();
+    document.querySelectorAll('[data-video-id]').forEach((card) => {
+      const vid = card.getAttribute('data-video-id');
+      if (vid) cards.set(vid, card);
+    });
+    if (!cards.size) return;
+
+    let controller = null;
+    const POLL_MS = 5 * 1000;
+
+    function updateCard(card, data) {
+      const viewsEl = card.querySelector('[data-live-views]');
+      const updatedEl = card.querySelector('[data-live-updated]');
+      if (viewsEl) {
+        const viewsText = (data.latest_views == null) ? '—' : Number(data.latest_views).toLocaleString();
+        viewsEl.textContent = `Views: ${viewsText}`;
+      }
+      if (updatedEl) {
+        updatedEl.textContent = `Updated: ${data.latest_ts_ist || '—'}`;
+      }
+    }
+
+    async function poll() {
+      if (controller) {
+        try { controller.abort(); } catch (e) {}
+      }
+      controller = new AbortController();
+      try {
+        const res = await fetch('/home/json', {
+          credentials: 'same-origin',
+          cache: 'no-store',
+          headers: { 'Accept': 'application/json' },
+          signal: controller.signal
+        });
+        if (!res.ok) return;
+        const payload = await res.json();
+        if (!payload || !Array.isArray(payload.videos)) return;
+        payload.videos.forEach((entry) => {
+          const card = cards.get(entry.video_id);
+          if (card) updateCard(card, entry);
+        });
+      } catch (err) {
+        if (err && err.name === 'AbortError') return;
+        console.error('home poll error:', err);
+      } finally {
+        controller = null;
+      }
+    }
+
+    poll();
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') poll();
+    }, POLL_MS);
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') {
+        if (controller) {
+          try { controller.abort(); } catch (e) {}
+        }
+      } else {
+        poll();
+      }
+    });
+
+    window.addEventListener('beforeunload', () => {
+      clearInterval(interval);
+      if (controller) {
+        try { controller.abort(); } catch (e) {}
+      }
+    });
+  })();
+</script>
 </body>
 </html>
