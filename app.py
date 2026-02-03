@@ -535,7 +535,7 @@ _CHANNEL_ID_CACHE_TTL = 60.0  # seconds
 # in-memory short cache for built video display (to reduce repeated heavy work)
 _video_display_cache: Dict[str, Tuple[dict, float]] = {}
 _video_display_cache_lock = threading.Lock()
-_VIDEO_DISPLAY_CACHE_TTL = 0  # seconds; tune this
+_VIDEO_DISPLAY_CACHE_TTL = 5  # seconds; tune this
 # maximum number of days of samples to fetch for display (reduce to speed up)
 _MAX_DISPLAY_DAYS = 14
 def invalidate_video_cache(video_id: str):
@@ -2400,25 +2400,62 @@ def video_detail(video_id):
 def video_detail_json(video_id):
     """
     Return minimal JSON for the video used by the frontend to update live values.
-    Always bypass the short in-memory UI cache so callers receive the freshest numbers.
+    Use lightweight queries to keep polling fast without rebuilding full display data.
     """
-    # force fresh build (bypass in-memory cache)
-    invalidate_video_cache(video_id)
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT thumbnail_url, thumbnail_prev_url, thumbnail_changed FROM video_list WHERE video_id=%s",
+            (video_id,)
+        )
+        vrow = cur.fetchone()
+        if not vrow:
+            return jsonify({"error": "not found"}), 404
+        cur.execute(
+            "SELECT ts_utc, views FROM views WHERE video_id=%s ORDER BY ts_utc DESC LIMIT 1",
+            (video_id,)
+        )
+        latest = cur.fetchone()
 
+    latest_ts = latest["ts_utc"] if latest else None
+    latest_views = latest["views"] if latest else None
+    latest_ts_iso = latest_ts.isoformat() if latest_ts is not None else None
+    latest_ts_ist = latest_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if latest_ts is not None else None
+
+    # resolve thumbnail the same way video_detail route does
+    thumbnail = vrow.get("thumbnail_url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+
+    return jsonify({
+        "video_id": video_id,
+        "latest_views": latest_views,
+        "latest_ts_iso": latest_ts_iso,
+        "latest_ts_ist": latest_ts_ist,
+        "thumbnail_changed": bool(vrow.get("thumbnail_changed", False)),
+        "thumbnail_url": thumbnail
+    })
+
+
+@app.post("/video/<video_id>/refresh")
+@login_required
+def refresh_video_rows(video_id):
+    invalidate_video_cache(video_id)
+    flash("Rows refreshed from the database.", "success")
+    return redirect(url_for("video_detail", video_id=video_id))
+
+@app.get("/video/<video_id>/rows")
+@login_required
+def video_rows_json(video_id):
+    invalidate_video_cache(video_id)
     info = build_video_display(video_id)
     if info is None:
         return jsonify({"error": "not found"}), 404
-
-    # resolve thumbnail the same way video_detail route does
-    thumbnail = info.get("thumbnail_url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-
+    days_html = render_template("_video_day_blocks.html", daily=info["daily"])
+    dates = list(info["daily"].keys())
     return jsonify({
-        "video_id": info["video_id"],
-        "latest_views": info.get("latest_views"),
+        "dates": dates,
+        "days_html": days_html,
         "latest_ts_iso": info.get("latest_ts_iso"),
-        "latest_ts_ist": info.get("latest_ts_ist"),
-        "thumbnail_changed": bool(info.get("thumbnail_changed", False)),
-        "thumbnail_url": thumbnail
+        "latest_ts_ist": info.get("latest_ts_ist")
     })
 
 

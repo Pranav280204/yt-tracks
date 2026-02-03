@@ -390,7 +390,7 @@
       const idx = dates.indexOf(date);
       if (prevBtn) prevBtn.disabled = (idx === dates.length - 1) || idx === -1;
       if (nextBtn) nextBtn.disabled = (idx <= 0);
-      if (block && window.innerWidth < 768) {
+      if (block) {
         setTimeout(()=> block.scrollIntoView({behavior:'smooth', block:'start'}), 60);
       }
     }
