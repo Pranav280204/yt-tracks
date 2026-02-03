@@ -292,6 +292,8 @@ def db():
                 POSTGRES_URL,
                 autocommit=True,
                 row_factory=dict_row,
+                connect_timeout=5,
+                options="-c statement_timeout=15000",
                 keepalives=1,
                 keepalives_idle=30,
                 keepalives_interval=10,
@@ -419,6 +421,12 @@ def init_db():
         cur.execute("""
         ALTER TABLE views
         ADD COLUMN IF NOT EXISTS comments BIGINT;
+        """)
+
+        # indexes to speed up video detail queries
+        cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_views_video_ts
+        ON views (video_id, ts_utc DESC);
         """)
 
 
@@ -2432,30 +2440,6 @@ def video_detail_json(video_id):
         "latest_ts_ist": latest_ts_ist,
         "thumbnail_changed": bool(vrow.get("thumbnail_changed", False)),
         "thumbnail_url": thumbnail
-    })
-
-
-@app.post("/video/<video_id>/refresh")
-@login_required
-def refresh_video_rows(video_id):
-    invalidate_video_cache(video_id)
-    flash("Rows refreshed from the database.", "success")
-    return redirect(url_for("video_detail", video_id=video_id))
-
-@app.get("/video/<video_id>/rows")
-@login_required
-def video_rows_json(video_id):
-    invalidate_video_cache(video_id)
-    info = build_video_display(video_id)
-    if info is None:
-        return jsonify({"error": "not found"}), 404
-    days_html = render_template("_video_day_blocks.html", daily=info["daily"])
-    dates = list(info["daily"].keys())
-    return jsonify({
-        "dates": dates,
-        "days_html": days_html,
-        "latest_ts_iso": info.get("latest_ts_iso"),
-        "latest_ts_ist": info.get("latest_ts_ist")
     })
 
 
