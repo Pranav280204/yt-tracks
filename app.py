@@ -2194,6 +2194,7 @@ def home():
         latest = latest_samples.get(vid)
         latest_views = latest["views"] if latest else None
         latest_ts = latest["ts_utc"] if latest else None
+        latest_ts_ist = latest_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if latest_ts else None
 
         vids.append({
             "video_id": vid,
@@ -2203,7 +2204,8 @@ def home():
             "is_tracking": bool(v["is_tracking"]),
             "channel_total_cached": channel_total,
             "latest_views": latest_views,
-            "latest_ts": latest_ts
+            "latest_ts": latest_ts,
+            "latest_ts_ist": latest_ts_ist
         })
 
     t_end = time.time()
@@ -2212,6 +2214,32 @@ def home():
              t_db_videos - t0, t_ch_map - t_db_videos, t_ch_totals - t_ch_map, t_latest_samples - t_ch_totals, t_end - t0)
 
     return render_template("home.html", videos=vids)
+
+
+@app.get("/home/json")
+@login_required
+def home_json():
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("SELECT video_id FROM video_list ORDER BY name")
+        video_rows = cur.fetchall()
+
+    video_ids = [v["video_id"] for v in video_rows]
+    latest_samples = get_latest_sample_per_video(video_ids) if video_ids else {}
+
+    payload = []
+    for vid in video_ids:
+        latest = latest_samples.get(vid)
+        latest_views = latest["views"] if latest else None
+        latest_ts = latest["ts_utc"] if latest else None
+        latest_ts_ist = latest_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if latest_ts else None
+        payload.append({
+            "video_id": vid,
+            "latest_views": latest_views,
+            "latest_ts_ist": latest_ts_ist
+        })
+
+    return jsonify({"videos": payload})
 
 @app.get("/mrbeast_sum")
 @login_required
@@ -2372,26 +2400,51 @@ def video_detail(video_id):
 def video_detail_json(video_id):
     """
     Return minimal JSON for the video used by the frontend to update live values.
-    Always bypass the short in-memory UI cache so callers receive the freshest numbers.
     """
-    # force fresh build (bypass in-memory cache)
-    invalidate_video_cache(video_id)
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT thumbnail_url, thumbnail_prev_url, thumbnail_changed, thumbnail_changed_at "
+            "FROM video_list WHERE video_id=%s",
+            (video_id,)
+        )
+        vrow = cur.fetchone()
+        if not vrow:
+            return jsonify({"error": "not found"}), 404
+        cur.execute(
+            "SELECT ts_utc, views FROM views WHERE video_id=%s ORDER BY ts_utc DESC LIMIT 1",
+            (video_id,)
+        )
+        latest = cur.fetchone()
 
+    latest_ts = latest["ts_utc"] if latest else None
+    latest_views = latest["views"] if latest else None
+    latest_ts_iso = latest_ts.isoformat() if latest_ts else None
+    latest_ts_ist = latest_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if latest_ts else None
+    thumbnail = vrow.get("thumbnail_url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+
+    return jsonify({
+        "video_id": video_id,
+        "latest_views": latest_views,
+        "latest_ts_iso": latest_ts_iso,
+        "latest_ts_ist": latest_ts_ist,
+        "thumbnail_changed": bool(vrow.get("thumbnail_changed", False)),
+        "thumbnail_url": thumbnail
+    })
+
+
+@app.get("/video/<video_id>/day_html")
+@login_required
+def video_day_html(video_id):
+    date_str = (request.args.get("date") or "").strip()
+    if not date_str:
+        return jsonify({"error": "missing date"}), 400
+    invalidate_video_cache(video_id)
     info = build_video_display(video_id)
     if info is None:
         return jsonify({"error": "not found"}), 404
-
-    # resolve thumbnail the same way video_detail route does
-    thumbnail = info.get("thumbnail_url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
-
-    return jsonify({
-        "video_id": info["video_id"],
-        "latest_views": info.get("latest_views"),
-        "latest_ts_iso": info.get("latest_ts_iso"),
-        "latest_ts_ist": info.get("latest_ts_ist"),
-        "thumbnail_changed": bool(info.get("thumbnail_changed", False)),
-        "thumbnail_url": thumbnail
-    })
+    rows = info.get("daily", {}).get(date_str, [])
+    return render_template("_day_table.html", date=date_str, day_rows=rows)
 
 
 @app.post("/add_video")
