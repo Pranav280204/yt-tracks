@@ -1,4 +1,4 @@
-{% for d, rows in daily.items() %}
+{% for d, rows in (daily or {}).items() %}
   <div class="day-block" data-date="{{ d }}">
     <div class="card mb-3">
       <div class="card-body table-card">

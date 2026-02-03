@@ -328,9 +328,6 @@
 
     <div class="d-flex align-items-center gap-2 mb-2">
       <button id="refreshRowsBtn" class="btn btn-sm btn-outline-primary" type="button">Refresh rows</button>
-      <form method="POST" action="{{ url_for('refresh_video_rows', video_id=v.video_id) }}">
-        <button class="btn btn-sm btn-outline-primary" type="submit">Refresh rows</button>
-      </form>
       <div class="small-note muted">Manually fetch the latest rows from the database.</div>
     </div>
 
@@ -350,9 +347,8 @@
     </div>
 
     <!-- Data tables (each day wrapped in .day-block) -->
-    {% set daily = v.daily %}
+    {% set daily = (v.daily if v is defined and v.daily is not none else {}) %}
     <div id="daysContainer">
-      {% include "_video_day_blocks.html" with daily=v.daily %}
       {% include "_video_day_blocks.html" %}
     </div>
 
@@ -544,7 +540,6 @@
             lastRowRefreshIso = j.latest_ts_iso;
             setTimeout(() => {
               refreshTableRows({silent: true});
-              window.location.reload();
             }, 250);
           }
         }
