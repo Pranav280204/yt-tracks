@@ -158,7 +158,7 @@
         <img class="video-thumb" src="{{ v.thumbnail }}" alt="thumbnail for {{ v.name }}">
       </a>
 
-      <div class="live-counter" id="liveViewCounter" data-live-views="{{ v.latest_views or 0 }}">
+      <div class="live-counter" id="liveViewCounter">
         <div class="live-counter-label">Live views</div>
         <div class="live-counter-value" id="liveViewValue">{{ "{:,}".format(v.latest_views or 0) }}</div>
         <div class="live-counter-sub">Updates every {{ v.pooling_interval }}s</div>

@@ -1486,8 +1486,6 @@ def build_video_display(vid: str):
                 # --- change 24h vs prev day (tolerant match) ---
                 # prev_map uses same tuple shape; gain_24h is at index 5
                 prev_tpl = prev_map.get(time_part) or find_closest_prev(prev_map, time_part, max_earlier_seconds=300)
-                if not prev_tpl:
-                    prev_tpl = find_closest_tpl(prev_map, time_part, tolerance_seconds=300)
                 prev_gain24 = prev_tpl[5] if prev_tpl else None
                 pct24_calc = None
                 if prev_gain24 not in (None, 0):
