@@ -458,11 +458,10 @@
     }
 
     const liveBadge = document.getElementById('liveBadge');
-    if (!liveBadge) return;
 
     const videoId = "{{ v.video_id }}";
-    let lastKnownIso = liveBadge.dataset.latestIso || null;
-    let lastKnownViews = Number(liveBadge.dataset.views || ({{ v.latest_views or 0 }}));
+    let lastKnownIso = liveBadge ? (liveBadge.dataset.latestIso || null) : null;
+    let lastKnownViews = Number(liveBadge ? (liveBadge.dataset.views || ({{ v.latest_views or 0 }})) : ({{ v.latest_views or 0 }}));
     let controller = null;
     const POLL_MS = 1 * 1000;
 
@@ -580,7 +579,9 @@
 
         if (j.latest_ts_iso && j.latest_ts_iso !== lastKnownIso) {
           lastKnownIso = j.latest_ts_iso;
-          liveBadge.dataset.latestIso = j.latest_ts_iso;
+          if (liveBadge) {
+            liveBadge.dataset.latestIso = j.latest_ts_iso;
+          }
           if (daysContainer && !rowRefreshQueued && lastRowRefreshIso !== j.latest_ts_iso) {
             rowRefreshQueued = true;
             lastRowRefreshIso = j.latest_ts_iso;
@@ -593,8 +594,11 @@
         if (j.latest_views != null) {
           const newViews = Number(j.latest_views);
           if (!Number.isNaN(newViews) && newViews !== lastKnownViews) {
-            liveBadge.dataset.views = String(newViews);
+            if (liveBadge) {
+              liveBadge.dataset.views = String(newViews);
+            }
             updateViews(newViews);
+            updateLiveCounter(newViews);
           }
         }
 
