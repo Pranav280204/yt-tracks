@@ -174,7 +174,7 @@
               <span class="dot" aria-hidden="true"></span>
               <span>
                 <span id="liveTextPrefix">Updated just now •</span>
-                <span id="liveViews" class="num-views" data-live-views>{{ "{:,}".format(v.latest_views) }}</span> views
+                <span id="liveViews" class="num-views" data-live-views-text>{{ "{:,}".format(v.latest_views) }}</span> views
               </span>
             </div>
             <div class="live-sub" id="liveSub">IST: {% if v.latest_ts_ist %}{{ v.latest_ts_ist }}{% else %}—{% endif %}</div>
@@ -210,7 +210,7 @@
       <div class="card p-3 mb-3">
         <div class="d-flex justify-content-between align-items-start">
           <div>
-            <div class="stat-large num-views" data-live-views>{{ "{:,}".format(v.latest_views or 0) }}</div>
+            <div class="stat-large num-views" data-live-views-text>{{ "{:,}".format(v.latest_views or 0) }}</div>
             <div class="stat-sub">Latest total views</div>
           </div>
           <div class="text-end">
@@ -528,7 +528,7 @@
 
     function updateViews(value) {
       lastKnownViews = value;
-      document.querySelectorAll('[data-live-views]').forEach((el) => {
+      document.querySelectorAll('[data-live-views-text]').forEach((el) => {
         const nextText = formatViews(value);
         if (el.textContent !== nextText) el.textContent = nextText;
       });
@@ -538,7 +538,6 @@
       if (!liveCounterEl || !liveValueEl) return;
       const nextText = formatViews(value);
       if (liveValueEl.textContent !== nextText) liveValueEl.textContent = nextText;
-      liveCounterEl.dataset.liveViews = String(value);
     }
 
     async function pollLiveCounter() {
