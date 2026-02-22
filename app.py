@@ -421,6 +421,11 @@ def init_db():
         ADD COLUMN IF NOT EXISTS compare_offset_days INTEGER;
         """)
 
+        cur.execute("""
+        ALTER TABLE video_list
+        ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE;
+        """)
+
         # View samples ----------------------------------
         cur.execute("""
         CREATE TABLE IF NOT EXISTS views (
@@ -1136,7 +1141,7 @@ def sampler_loop():
             tsu = now_utc()
             conn = db()
             with conn.cursor() as cur:
-                cur.execute("SELECT video_id FROM video_list WHERE is_tracking=TRUE ORDER BY video_id")
+                cur.execute("SELECT video_id FROM video_list WHERE is_tracking=TRUE AND is_deleted=FALSE ORDER BY video_id")
                 vids = [r["video_id"] for r in cur.fetchall()]
 
             if not vids:
@@ -1422,7 +1427,7 @@ def build_video_display(vid: str):
     with conn.cursor() as cur:
         cur.execute(
             "SELECT video_id, name, is_tracking, compare_video_id, compare_offset_days, thumbnail_url, thumbnail_prev_url, thumbnail_changed, thumbnail_changed_at "
-            "FROM video_list WHERE video_id=%s",
+            "FROM video_list WHERE video_id=%s AND is_deleted=FALSE",
             (vid,)
         )
         vrow = cur.fetchone()
@@ -2230,7 +2235,7 @@ def home():
     t0 = time.time()
     conn = db()
     with conn.cursor() as cur:
-        cur.execute("SELECT video_id, name, is_tracking FROM video_list ORDER BY name")
+        cur.execute("SELECT video_id, name, is_tracking FROM video_list WHERE is_deleted=FALSE ORDER BY name")
         videos = cur.fetchall()
     t_db_videos = time.time()
 
@@ -2287,7 +2292,7 @@ def home():
 def home_json():
     conn = db()
     with conn.cursor() as cur:
-        cur.execute("SELECT video_id FROM video_list ORDER BY name")
+        cur.execute("SELECT video_id FROM video_list WHERE is_deleted=FALSE ORDER BY name")
         video_rows = cur.fetchall()
 
     video_ids = [v["video_id"] for v in video_rows]
@@ -2472,7 +2477,7 @@ def video_detail_json(video_id):
     conn = db()
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT thumbnail_url, thumbnail_prev_url, thumbnail_changed FROM video_list WHERE video_id=%s",
+            "SELECT thumbnail_url, thumbnail_prev_url, thumbnail_changed FROM video_list WHERE video_id=%s AND is_deleted=FALSE",
             (video_id,)
         )
         vrow = cur.fetchone()
@@ -2578,9 +2583,9 @@ def add_video():
     conn = db()
     with conn.cursor() as cur:
         cur.execute("""
-            INSERT INTO video_list (video_id, name, is_tracking)
-            VALUES (%s, %s, TRUE)
-            ON CONFLICT (video_id) DO UPDATE SET name=EXCLUDED.name, is_tracking=TRUE
+            INSERT INTO video_list (video_id, name, is_tracking, is_deleted)
+            VALUES (%s, %s, TRUE, FALSE)
+            ON CONFLICT (video_id) DO UPDATE SET name=EXCLUDED.name, is_tracking=TRUE, is_deleted=FALSE
         """, (video_id, title))
 
     # try to fetch & store thumbnail hash (best-effort)
@@ -2727,7 +2732,7 @@ def stop_tracking(video_id):
 
     # Toggle tracking state
     with conn.cursor() as cur:
-        cur.execute("SELECT is_tracking, name FROM video_list WHERE video_id=%s", (video_id,))
+        cur.execute("SELECT is_tracking, name FROM video_list WHERE video_id=%s AND is_deleted=FALSE", (video_id,))
         row = cur.fetchone()
         if not row:
             flash("Video not found.", "warning")
@@ -2751,15 +2756,14 @@ def remove_video(video_id):
 
     conn = db()
     with conn.cursor() as cur:
-        cur.execute("SELECT name FROM video_list WHERE video_id=%s", (video_id,))
+        cur.execute("SELECT name FROM video_list WHERE video_id=%s AND is_deleted=FALSE", (video_id,))
         row = cur.fetchone()
         if not row:
             flash("Video not found.", "warning")
             return redirect(url_for("home"))
         name = row["name"]
-        cur.execute("DELETE FROM views WHERE video_id=%s", (video_id,))
-        cur.execute("DELETE FROM video_list WHERE video_id=%s", (video_id,))
-        flash(f"Removed '{name}' and all data.", "success")
+        cur.execute("UPDATE video_list SET is_tracking=FALSE, is_deleted=TRUE WHERE video_id=%s", (video_id,))
+        flash(f"Removed '{name}' from active tracking. Historical data was preserved.", "success")
     return redirect(url_for("home"))
 
 
