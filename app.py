@@ -897,7 +897,7 @@ def process_gains(rows_asc: list[dict]):
 
     Returns list of tuples:
       (ts_ist_str, views, gain_5min, hourly_views_gain, hourly_likes_gain, gain_24h,
-       hourly_pct_change, daily_likes_gain, likes_val, comments_val)
+       gain_24h_midpoint_ist_str, hourly_pct_change, daily_likes_gain, likes_val, comments_val)
 
     hourly_likes_gain may be None when likes are missing or interpolation isn't possible.
     """
@@ -923,6 +923,47 @@ def process_gains(rows_asc: list[dict]):
 
     first_ts = rows_asc[0]["ts_utc"]
     first_ts_epoch = first_ts.timestamp()
+
+    def _estimate_midpoint_ts_for_24h_window(end_idx: int, start_ts: float, start_views: float, end_views: int):
+        """
+        Approximate timestamp when views crossed halfway point between start_views and end_views
+        within [start_ts, end_ts]. Uses linear interpolation on sampled segments.
+        """
+        end_ts = ts_list[end_idx]
+        if end_ts <= start_ts:
+            return None
+
+        target_views = start_views + ((float(end_views) - float(start_views)) / 2.0)
+
+        prev_t = start_ts
+        prev_v = float(start_views)
+
+        for seg_idx in range(end_idx + 1):
+            seg_t = ts_list[seg_idx]
+            if seg_t <= start_ts:
+                continue
+            if seg_t > end_ts:
+                seg_t = end_ts
+                seg_v = float(end_views)
+            else:
+                seg_v = float(views_list[seg_idx])
+
+            v_min = min(prev_v, seg_v)
+            v_max = max(prev_v, seg_v)
+            if v_min <= target_views <= v_max:
+                if seg_v == prev_v:
+                    mid_ts = prev_t
+                else:
+                    frac = (target_views - prev_v) / (seg_v - prev_v)
+                    mid_ts = prev_t + frac * (seg_t - prev_t)
+                return datetime.fromtimestamp(mid_ts, tz=timezone.utc)
+
+            prev_t = seg_t
+            prev_v = seg_v
+            if seg_t >= end_ts:
+                break
+
+        return None
 
     for i, r in enumerate(rows_asc):
         ts_utc = r["ts_utc"]
@@ -994,6 +1035,8 @@ def process_gains(rows_asc: list[dict]):
         prev_idx_d = posd - 1
         next_idx_d = posd if posd <= i else None
 
+        gain_24h_midpoint_ist = None
+
         if prev_idx_d >= 0 and next_idx_d is not None:
             t0 = ts_list[prev_idx_d]; v0 = views_list[prev_idx_d]
             t1 = ts_list[next_idx_d]; v1 = views_list[next_idx_d]
@@ -1004,15 +1047,24 @@ def process_gains(rows_asc: list[dict]):
                 ref_day = v0 + frac * (v1 - v0)
             try:
                 gain_24h = views - int(round(ref_day))
+                midpoint_ts_utc = _estimate_midpoint_ts_for_24h_window(i, target_d_ts, ref_day, views)
+                if midpoint_ts_utc is not None:
+                    gain_24h_midpoint_ist = midpoint_ts_utc.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S")
             except Exception:
                 gain_24h = None
+                gain_24h_midpoint_ist = None
         elif prev_idx_d >= 0:
             try:
                 gain_24h = views - views_list[prev_idx_d]
+                midpoint_ts_utc = _estimate_midpoint_ts_for_24h_window(i, ts_list[prev_idx_d], views_list[prev_idx_d], views)
+                if midpoint_ts_utc is not None:
+                    gain_24h_midpoint_ist = midpoint_ts_utc.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S")
             except Exception:
                 gain_24h = None
+                gain_24h_midpoint_ist = None
         else:
             gain_24h = None
+            gain_24h_midpoint_ist = None
 
         # ---------- hourly percent change (views) ----------
         hourly_pct_change = None
@@ -1091,6 +1143,7 @@ def process_gains(rows_asc: list[dict]):
             hourly_views,       # hourly views gain
             hourly_likes,       # <-- NEW hourly likes gain
             gain_24h,
+            gain_24h_midpoint_ist,
             hourly_pct_change,
             daily_likes_gain,
             r.get("likes"),
@@ -1524,8 +1577,10 @@ def build_video_display(vid: str):
             prev_likes_for_date = None
 
             for tpl in processed:
-                # tpl: (ts_ist, views, gain_5m, hourly_views_gain, hourly_likes_gain, gain_24h, hourly_pct_change, daily_likes_gain, likes_val, comments_val)
-                (ts_ist, views, gain_5m, hourly_views_gain, hourly_likes_gain, gain_24h, hourly_pct_change, daily_likes_gain, likes_val, comments_val) = tpl
+                # tpl: (ts_ist, views, gain_5m, hourly_views_gain, hourly_likes_gain, gain_24h,
+                #       gain_24h_midpoint_ist, hourly_pct_change, daily_likes_gain, likes_val, comments_val)
+                (ts_ist, views, gain_5m, hourly_views_gain, hourly_likes_gain, gain_24h,
+                 gain_24h_midpoint_ist, hourly_pct_change, daily_likes_gain, likes_val, comments_val) = tpl
                 time_part = ts_ist.split(" ")[1]
 
                 # --- change 24h vs prev day (tolerant match) ---
@@ -1605,10 +1660,12 @@ def build_video_display(vid: str):
                     engagement_rate = None
 
                 # Append canonical tuple now includes daily_likes_gain and likes_gain
-                # (ts_ist, views, gain_5m, hourly_views_gain, hourly_likes_gain, gain_24h, hourly_pct_change,
-                #  projected, comp_diff, five_min_ratio, daily_likes_gain, likes_gain, comments_val, engagement_rate)
+                # (ts_ist, views, gain_5m, hourly_views_gain, hourly_likes_gain, gain_24h,
+                #  gain_24h_midpoint_ist, hourly_pct_change, projected, comp_diff, five_min_ratio,
+                #  daily_likes_gain, likes_gain, comments_val, engagement_rate)
                 display_rows.append((
-                    ts_ist, views, gain_5m, hourly_views_gain, hourly_likes_gain, gain_24h, hourly_pct_change,
+                    ts_ist, views, gain_5m, hourly_views_gain, hourly_likes_gain, gain_24h,
+                    gain_24h_midpoint_ist, hourly_pct_change,
                     projected, comp_diff, five_min_ratio, daily_likes_gain, likes_gain, comments_val, engagement_rate
                 ))
 
