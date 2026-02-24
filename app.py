@@ -422,6 +422,25 @@ def init_db():
         """)
 
         cur.execute("""
+        CREATE TABLE IF NOT EXISTS comparison_configs (
+          id SERIAL PRIMARY KEY,
+          video_id TEXT NOT NULL REFERENCES video_list(video_id) ON DELETE CASCADE,
+          compare_video_id TEXT NOT NULL,
+          compare_offset_days INTEGER NOT NULL,
+          column_name TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        );
+        """)
+        cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_comparison_configs_video
+        ON comparison_configs (video_id);
+        """)
+        cur.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_comparison_configs_unique_colname
+        ON comparison_configs (video_id, column_name);
+        """)
+
+        cur.execute("""
         ALTER TABLE video_list
         ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN NOT NULL DEFAULT FALSE;
         """)
@@ -1671,8 +1690,23 @@ def build_video_display(vid: str):
             "remaining_seconds": int(remaining_seconds)
         })
 
+    comparison_configs = []
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, compare_video_id, compare_offset_days, column_name FROM comparison_configs WHERE video_id=%s ORDER BY id ASC",
+            (vid,)
+        )
+        comparison_configs = cur.fetchall() or []
+
     if compare_video_id and compare_offset_days is not None:
         compare_meta = {"compare_video_id": compare_video_id, "offset_days": compare_offset_days}
+        if not comparison_configs:
+            comparison_configs = [{
+                "id": None,
+                "compare_video_id": compare_video_id,
+                "compare_offset_days": compare_offset_days,
+                "column_name": "Default comparison"
+            }]
     else:
         compare_meta = None
 
@@ -1688,6 +1722,7 @@ def build_video_display(vid: str):
         "latest_ts_ist": latest_ts_ist,
         "channel_info": channel_info,
         "compare_meta": compare_meta,
+        "comparison_configs": comparison_configs,
         "thumbnail_url": vrow.get("thumbnail_url"),
         "thumbnail_prev_url": vrow.get("thumbnail_prev_url"),
         "thumbnail_changed": bool(vrow.get("thumbnail_changed")),
@@ -2018,7 +2053,6 @@ def fetch_hourly_for_ist_date(video_id: str, date_ist):
 def video_stats(video_id):
     # pick IST date from query param ?date=YYYY-MM-DD else default latest IST date available
     sel_date_str = request.args.get("date")
-    # get latest IST date available for this video (from DB)
     conn = db()
     with conn.cursor() as cur:
         cur.execute("SELECT MAX(ts_utc) AS latest_ts FROM views WHERE video_id=%s", (video_id,))
@@ -2037,50 +2071,64 @@ def video_stats(video_id):
     else:
         sel_date = latest_ist_date
 
-    # fetch configured comparison video (if any)
-    compare_video_id = None
-    compare_offset_days = None
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT compare_video_id, compare_offset_days FROM video_list WHERE video_id=%s",
-            (video_id,)
-        )
-        comp_cfg = cur.fetchone()
-        if comp_cfg:
-            compare_video_id = comp_cfg.get("compare_video_id")
-            try:
-                if comp_cfg.get("compare_offset_days") is not None:
-                    compare_offset_days = int(comp_cfg.get("compare_offset_days"))
-            except Exception:
-                compare_offset_days = None
-
-    # fetch daily list and hourly for selected IST date
-    daily = fetch_daily_gains(video_id)   # keep all days
+    daily = fetch_daily_gains(video_id)
     hourly = fetch_hourly_for_ist_date(video_id, sel_date)
 
-    # fetch hourly stats for the comparison video aligned by configured date offset
-    comparison_date = None
-    comparison_hourly = []
-    if compare_video_id and compare_offset_days is not None:
-        comparison_date = sel_date - timedelta(days=compare_offset_days)
-        comparison_hourly = fetch_hourly_for_ist_date(compare_video_id, comparison_date)
+    comparison_columns = []
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, compare_video_id, compare_offset_days, column_name FROM comparison_configs WHERE video_id=%s ORDER BY id ASC",
+            (video_id,)
+        )
+        comp_rows = cur.fetchall() or []
 
-    comparison_gain_by_hour = {r["hour"]: r.get("hour_gain") for r in comparison_hourly}
+        if not comp_rows:
+            cur.execute(
+                "SELECT compare_video_id, compare_offset_days FROM video_list WHERE video_id=%s",
+                (video_id,)
+            )
+            legacy = cur.fetchone()
+            if legacy and legacy.get("compare_video_id") and legacy.get("compare_offset_days") is not None:
+                comp_rows = [{
+                    "id": "legacy",
+                    "compare_video_id": legacy.get("compare_video_id"),
+                    "compare_offset_days": int(legacy.get("compare_offset_days")),
+                    "column_name": "Default comparison"
+                }]
 
-    # add hourly percentage drop against comparison video's hourly gain
-    for row in hourly:
-        main_gain = row.get("hour_gain")
-        comp_gain = comparison_gain_by_hour.get(row.get("hour"))
-        row["comparison_hour_gain"] = comp_gain
-        row["hourly_drop_pct"] = None
-        if main_gain is None or comp_gain is None or comp_gain == 0:
-            continue
+    for comp in comp_rows:
+        key = str(comp.get("id"))
+        comp_video_id = comp.get("compare_video_id")
         try:
-            row["hourly_drop_pct"] = round(((comp_gain - main_gain) / abs(comp_gain)) * 100.0, 2)
+            offset_days = int(comp.get("compare_offset_days"))
         except Exception:
-            row["hourly_drop_pct"] = None
+            continue
+        if not comp_video_id:
+            continue
 
-    # build list of dates (IST) available for selector from DB quickly:
+        comparison_date = sel_date - timedelta(days=offset_days)
+        comp_hourly = fetch_hourly_for_ist_date(comp_video_id, comparison_date)
+        gains_by_hour = {r["hour"]: r.get("hour_gain") for r in comp_hourly}
+
+        comparison_columns.append({
+            "key": key,
+            "name": (comp.get("column_name") or comp_video_id).strip() or comp_video_id,
+            "video_id": comp_video_id,
+            "comparison_date": comparison_date.isoformat()
+        })
+
+        for row in hourly:
+            main_gain = row.get("hour_gain")
+            comp_gain = gains_by_hour.get(row.get("hour"))
+            row.setdefault("comparison_drops", {})
+            drop_pct = None
+            if main_gain is not None and comp_gain not in (None, 0):
+                try:
+                    drop_pct = round(((comp_gain - main_gain) / abs(comp_gain)) * 100.0, 2)
+                except Exception:
+                    drop_pct = None
+            row["comparison_drops"][key] = drop_pct
+
     with conn.cursor() as cur:
         cur.execute("""
             SELECT DISTINCT ((ts_utc AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Kolkata')::date AS ist_date
@@ -2089,7 +2137,6 @@ def video_stats(video_id):
         date_rows = cur.fetchall()
     ist_dates = [r["ist_date"].isoformat() for r in date_rows]
 
-    # pass to template with helpful formatted labels
     return render_template(
         "video_stats.html",
         video_id=video_id,
@@ -2097,8 +2144,7 @@ def video_stats(video_id):
         hourly=hourly,
         selected_date=sel_date.isoformat(),
         ist_dates=ist_dates,
-        compare_video_id=compare_video_id,
-        comparison_date=comparison_date.isoformat() if comparison_date else None
+        comparison_columns=comparison_columns
     )
 
 @app.get("/logout")
@@ -2667,68 +2713,82 @@ def add_target(video_id):
 @app.post("/set_comparison/<video_id>")
 @login_required
 def set_comparison(video_id):
-    """
-    Configure comparison for a video:
-    - comparison_link: YouTube URL or video id
-    - comparison_date: YYYY-MM-DD (IST date for comparison video)
-    Logic:
-      Let main_latest_date_ist be latest IST date for this video.
-      offset_days = main_latest_date_ist - comparison_date
-      For any row at date D_main, we compare to D_comp = D_main - offset_days, same time-of-day.
-    """
     comp_link = (request.form.get("comparison_link") or "").strip()
     comp_date_str = (request.form.get("comparison_date") or "").strip()
+    column_name = (request.form.get("comparison_name") or "").strip()
 
-    # If both empty -> clear comparison
-    if not comp_link and not comp_date_str:
+    # reset all comparisons when form is submitted empty
+    if not comp_link and not comp_date_str and not column_name:
         conn = db()
         with conn.cursor() as cur:
+            cur.execute("DELETE FROM comparison_configs WHERE video_id=%s", (video_id,))
             cur.execute(
                 "UPDATE video_list SET compare_video_id=NULL, compare_offset_days=NULL WHERE video_id=%s",
                 (video_id,)
             )
-        flash("Comparison cleared for this video.", "info")
+        flash("All comparisons cleared for this video.", "info")
         return redirect(url_for("video_detail", video_id=video_id))
 
-    # Resolve comparison video id from URL or raw id
     comp_vid = extract_video_id(comp_link) or comp_link
     if not comp_vid:
         flash("Invalid comparison video link / id.", "danger")
         return redirect(url_for("video_detail", video_id=video_id))
 
-    # Parse comparison date (YYYY-MM-DD)
     try:
         comp_date = datetime.fromisoformat(comp_date_str).date()
     except Exception:
         flash("Invalid comparison date (use YYYY-MM-DD).", "danger")
         return redirect(url_for("video_detail", video_id=video_id))
 
+    if not column_name:
+        column_name = f"vs {comp_vid}"
+
     conn = db()
     with conn.cursor() as cur:
-        # latest sample for MAIN video
-        cur.execute(
-            "SELECT max(ts_utc) AS latest_ts FROM views WHERE video_id=%s",
-            (video_id,)
-        )
+        cur.execute("SELECT max(ts_utc) AS latest_ts FROM views WHERE video_id=%s", (video_id,))
         r = cur.fetchone()
 
     if not r or not r["latest_ts"]:
         flash("Cannot set comparison: no data yet for this video.", "warning")
         return redirect(url_for("video_detail", video_id=video_id))
 
-    latest_utc = r["latest_ts"]
-    latest_ist_date = latest_utc.astimezone(IST).date()
-
+    latest_ist_date = r["latest_ts"].astimezone(IST).date()
     offset_days = (latest_ist_date - comp_date).days
 
     conn = db()
     with conn.cursor() as cur:
+        try:
+            cur.execute(
+                """
+                INSERT INTO comparison_configs (video_id, compare_video_id, compare_offset_days, column_name)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (video_id, comp_vid, offset_days, column_name)
+            )
+        except Exception:
+            flash("Comparison column name already exists. Please choose a unique name.", "danger")
+            return redirect(url_for("video_detail", video_id=video_id))
+
+        # keep legacy columns synced with latest selection for backward compatibility
         cur.execute(
             "UPDATE video_list SET compare_video_id=%s, compare_offset_days=%s WHERE video_id=%s",
             (comp_vid, offset_days, video_id)
         )
 
-    flash(f"Comparison set: vs {comp_vid} with offset {offset_days} days.", "success")
+    flash(f"Comparison added: {column_name}.", "success")
+    return redirect(url_for("video_detail", video_id=video_id))
+
+
+@app.post("/remove_comparison/<video_id>/<int:comparison_id>")
+@login_required
+def remove_comparison(video_id, comparison_id):
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM comparison_configs WHERE id=%s AND video_id=%s",
+            (comparison_id, video_id)
+        )
+    flash("Comparison removed.", "info")
     return redirect(url_for("video_detail", video_id=video_id))
 
 
