@@ -291,7 +291,7 @@
           {% for c in v.comparison_configs %}
             <div class="d-flex align-items-center gap-2 mb-1">
               <span><strong>{{ c.column_name }}</strong> → {{ c.compare_video_id }}</span>
-              {% if c.id %}
+              {% if c.id is number %}
               <form method="POST" action="{{ url_for('remove_comparison', video_id=v.video_id, comparison_id=c.id) }}" class="m-0">
                 <button class="btn btn-sm btn-outline-danger" type="submit">Remove</button>
               </form>
