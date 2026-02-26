@@ -1135,9 +1135,9 @@ def process_gains(rows_asc: list[dict]):
     return out
 
 
-def format_signed_hms_diff(current_ts: datetime, previous_ts: datetime):
-    """Format current_ts - previous_ts as [sign]HH:MM:SS."""
-    delta_seconds = int((current_ts - previous_ts).total_seconds())
+def format_signed_hms_diff(current_ts: datetime, previous_ts: datetime, baseline_seconds: int = 0):
+    """Format (current_ts - previous_ts - baseline_seconds) as [sign]HH:MM:SS."""
+    delta_seconds = int((current_ts - previous_ts).total_seconds()) - int(baseline_seconds)
     sign = "-" if delta_seconds < 0 else ""
     total = abs(delta_seconds)
     hours = total // 3600
@@ -1575,6 +1575,7 @@ def build_video_display(vid: str):
                             midpoint_diff_24h = format_signed_hms_diff(
                                 datetime.fromisoformat(gain_24h_midpoint_ist),
                                 datetime.fromisoformat(prior_midpoint_ist),
+                                baseline_seconds=86400,
                             )
                     except Exception:
                         midpoint_diff_24h = None
