@@ -92,6 +92,31 @@
     .table td, .table th { vertical-align:middle; font-size:.92rem; border-top:1px solid #fafafa; white-space:nowrap; }
     .table-card { padding:.75rem; border-radius:.5rem; border:1px solid var(--border); background:linear-gradient(180deg,#ffffff,#fbfcff); }
 
+    /* Video detail day-table color polish */
+    .table-card .table thead th {
+      background: linear-gradient(180deg, #f4f8ff 0%, #eef5ff 100%);
+      color: #1f3b73;
+      border-top: 0;
+      font-weight: 700;
+    }
+    .table-card .table tbody tr:nth-child(odd) { background: #fcfdff; }
+    .table-card .table tbody tr:nth-child(even) { background: #f8fbff; }
+    .table-card .table tbody tr td { border-top: 1px solid #eef2f7; }
+
+    /* Column accents */
+    .table-card .table tbody td:nth-child(2) { color: #0b5ed7; font-weight: 700; }
+    .table-card .table tbody td:nth-child(6) { color: #5f3dc4; font-weight: 700; }
+    .table-card .table tbody td:nth-child(7) {
+      background: rgba(255, 193, 7, 0.10);
+      color: #8a6d00;
+      font-weight: 700;
+    }
+    .table-card .table tbody td:nth-child(8) {
+      background: rgba(13, 202, 240, 0.10);
+      color: #0b7285;
+      font-weight: 700;
+    }
+
     /* make stats panel normal (not sticky or fixed-width) per request */
     .stats-panel { position:static; width:100%; align-self:flex-start; }
     .stat-large { font-size:1.5rem; font-weight:800; }
