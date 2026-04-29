@@ -1472,7 +1472,7 @@ def build_video_display(vid: str):
     with conn.cursor() as cur:
         cur.execute(
             "SELECT video_id, name, is_tracking, thumbnail_url, thumbnail_prev_url, thumbnail_changed, thumbnail_changed_at "
-            "FROM video_list WHERE video_id=%s AND is_deleted=FALSE",
+            "FROM video_list WHERE video_id=%s",
             (vid,)
         )
         vrow = cur.fetchone()
@@ -2491,7 +2491,7 @@ def video_detail_json(video_id):
     conn = db()
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT thumbnail_url, thumbnail_prev_url, thumbnail_changed FROM video_list WHERE video_id=%s AND is_deleted=FALSE",
+            "SELECT thumbnail_url, thumbnail_prev_url, thumbnail_changed FROM video_list WHERE video_id=%s",
             (video_id,)
         )
         vrow = cur.fetchone()
