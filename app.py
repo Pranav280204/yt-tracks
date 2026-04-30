@@ -2524,6 +2524,16 @@ def video_detail_json(video_id):
 @app.get("/video/<video_id>/live_views")
 @login_required
 def video_live_views(video_id):
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("SELECT is_deleted FROM video_list WHERE video_id=%s", (video_id,))
+        row = cur.fetchone()
+
+    if not row:
+        return jsonify({"error": "not_found"}), 404
+    if bool(row.get("is_deleted")):
+        return jsonify({"video_id": video_id, "live_views": None, "skipped": "deleted"})
+
     api_key = get_rotating_api_key()
     if not api_key:
         return jsonify({"error": "api_key_missing"}), 503
