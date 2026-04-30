@@ -5,6 +5,10 @@ import logging
 import time
 # near other imports at top of file
 import requests
+try:
+    import resend
+except Exception:
+    resend = None
 import hashlib
 import json
 import math
@@ -1860,6 +1864,17 @@ def _send_admin_approval_email(email, token):
 
     if RESEND_API_KEY:
         try:
+            if resend is not None:
+                resend.api_key = RESEND_API_KEY
+                resend.Emails.send({
+                    "from": RESEND_FROM,
+                    "to": [ADMIN_APPROVAL_EMAIL],
+                    "subject": subject,
+                    "html": f"<p>Approve Google login for <strong>{email}</strong>: <a href=\"{approve_url}\">Approve user</a></p>",
+                })
+                return True
+
+            # Fallback to HTTP API when resend SDK is not installed
             resp = requests.post(
                 "https://api.resend.com/emails",
                 headers={
