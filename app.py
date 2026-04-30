@@ -25,7 +25,7 @@ from functools import wraps
 import pandas as pd
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    flash, send_file, session, g, make_response, jsonify
+    flash, send_file, session, g, make_response, jsonify, send_from_directory, abort
 )
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -3250,6 +3250,23 @@ def submit_payment():
         flash("Payment submitted, but admin email notification failed. Please contact admin to ensure faster review.", "warning")
     return redirect(url_for("payment_page"))
 
+
+
+
+@app.get("/payment-proof/<path:proof_path>")
+@login_required
+def payment_proof(proof_path):
+    if not g.user.get("is_admin"):
+        abort(403)
+
+    safe_base = os.path.abspath("uploads/payment_proofs")
+    absolute_path = os.path.abspath(os.path.join(safe_base, proof_path))
+    if not absolute_path.startswith(safe_base + os.sep):
+        abort(404)
+    if not os.path.exists(absolute_path):
+        abort(404)
+
+    return send_from_directory(safe_base, proof_path)
 
 @app.route("/admin/users", methods=["GET", "POST"])
 def admin_users():
