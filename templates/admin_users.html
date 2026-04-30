@@ -141,7 +141,7 @@
       {% for pr in payment_requests %}
       <div class="border rounded p-2 mb-2">
         <div><strong>{{ pr.username }}</strong> | Txn: {{ pr.transaction_id }} | {{ pr.submitted_at }}</div>
-        <div><a href="/{{ pr.screenshot_path }}" target="_blank">View screenshot</a></div>
+        <div><a href="{{ url_for('payment_proof', proof_path=pr.screenshot_path.replace('uploads/payment_proofs/', '')) }}" target="_blank">View screenshot</a></div>
         <div class="d-flex gap-2 mt-2">
           <form method="POST"><input type="hidden" name="action" value="approve_payment"><input type="hidden" name="request_id" value="{{ pr.id }}"><button class="btn btn-sm btn-success">Approve</button></form>
           <form method="POST"><input type="hidden" name="action" value="reject_payment"><input type="hidden" name="request_id" value="{{ pr.id }}"><button class="btn btn-sm btn-danger">Reject</button></form>
