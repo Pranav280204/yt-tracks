@@ -2314,8 +2314,6 @@ def google_oauth_callback_view():
     next_url = session.pop("oauth_next", url_for("home"))
     return _issue_login_session(conn, user["id"], next_url)
 
-app.view_functions.pop("login_google", None)
-app.view_functions.pop("google_callback", None)
 # @app.route("/login/google", endpoint="google_oauth_login")  # disabled duplicate route
 def google_oauth_login_view():
     if g.get("user"):
@@ -2413,8 +2411,6 @@ def google_oauth_callback_view():
     next_url = session.pop("oauth_next", url_for("home"))
     return _issue_login_session(conn, user["id"], next_url)
 
-app.view_functions.pop("login_google", None)
-app.view_functions.pop("google_callback", None)
 def google_oauth_login_view():
     if g.get("user"):
         return redirect(url_for("home"))
@@ -2516,8 +2512,6 @@ if "google_oauth_login" not in app.view_functions:
 if "google_oauth_callback" not in app.view_functions:
     app.add_url_rule("/auth/google/callback", endpoint="google_oauth_callback", view_func=google_oauth_callback_view)
 
-app.view_functions.pop("login_google", None)
-app.view_functions.pop("google_callback", None)
 def google_oauth_login_view():
     if g.get("user"):
         return redirect(url_for("home"))
