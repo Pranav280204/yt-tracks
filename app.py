@@ -11,6 +11,7 @@ except Exception:
     resend = None
 import hashlib
 import json
+import uuid
 import math
 import secrets
 import bisect
@@ -401,6 +402,35 @@ def init_db():
         ALTER TABLE users
         ADD COLUMN IF NOT EXISTS device_info TEXT;
         """)
+        cur.execute("""
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS subscription_expiry_date TIMESTAMPTZ;
+        """)
+        cur.execute("""
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS grace_period_end TIMESTAMPTZ;
+        """)
+        cur.execute("""
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'approved';
+        """)
+        cur.execute("""
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS last_reminder_sent TEXT;
+        """)
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS payment_requests (
+          id SERIAL PRIMARY KEY,
+          user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          transaction_id TEXT NOT NULL,
+          screenshot_path TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          reviewed_at TIMESTAMPTZ,
+          reviewed_by INT REFERENCES users(id) ON DELETE SET NULL,
+          admin_note TEXT
+        );
+        """)
 
         # Videos ----------------------------------
         cur.execute("""
@@ -544,7 +574,7 @@ def get_current_user():
     conn = db()
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, username, current_session_token, is_active "
+            "SELECT id, username, current_session_token, is_active, subscription_expiry_date, grace_period_end, payment_status, last_reminder_sent "
             "FROM users WHERE id=%s",
             (uid,)
         )
@@ -567,11 +597,32 @@ def get_current_user():
 def load_user():
     # runs every request; store user in g
     g.user = get_current_user()
+    g.subscription = None
+    if not g.user:
+        return
+    now = datetime.now(timezone.utc)
+    expiry = g.user.get("subscription_expiry_date")
+    grace_end = g.user.get("grace_period_end")
+    if not expiry:
+        expiry = now + timedelta(days=30)
+        grace_end = expiry + timedelta(days=3)
+        with db().cursor() as cur:
+            cur.execute("UPDATE users SET subscription_expiry_date=%s, grace_period_end=%s WHERE id=%s", (expiry, grace_end, g.user["id"]))
+        g.user["subscription_expiry_date"] = expiry
+        g.user["grace_period_end"] = grace_end
+    days_left = (expiry.date() - now.date()).days
+    in_grace = now > expiry and now <= grace_end
+    expired_blocked = now > grace_end
+    g.subscription = {"expiry": expiry, "grace_end": grace_end, "days_left": days_left, "in_grace": in_grace, "expired_blocked": expired_blocked}
+
+    if request.endpoint and request.endpoint not in {"login", "logout", "static", "payment_page", "submit_payment", "google_oauth_login", "google_oauth_callback", "approve_google_user", "admin_users"}:
+        if expired_blocked or g.user.get("payment_status") == "pending":
+            return redirect(url_for("payment_page"))
 
 @app.context_processor
 def inject_user():
     # make current_user available in templates
-    return {"current_user": getattr(g, "user", None)}
+    return {"current_user": getattr(g, "user", None), "subscription_info": getattr(g, "subscription", None)}
 
 def login_required(f):
     @wraps(f)
@@ -3087,6 +3138,41 @@ def logout():
     flash("Logged out.", "info")
     return redirect(url_for("login"))
 
+def _allowed_payment_file(filename: str) -> bool:
+    ext = (filename.rsplit(".", 1)[-1].lower() if "." in filename else "")
+    return ext in {"png", "jpg", "jpeg", "webp", "pdf"}
+
+@app.get("/payment")
+@login_required
+def payment_page():
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, status, transaction_id, submitted_at FROM payment_requests WHERE user_id=%s ORDER BY submitted_at DESC LIMIT 1", (g.user["id"],))
+        latest = cur.fetchone()
+    return render_template("payment.html", latest=latest, price_inr=900)
+
+@app.post("/payment/submit")
+@login_required
+def submit_payment():
+    txid = (request.form.get("transaction_id") or "").strip()
+    file = request.files.get("payment_screenshot")
+    if not txid or not file or not file.filename:
+        flash("Transaction ID and screenshot are required.", "warning")
+        return redirect(url_for("payment_page"))
+    if not _allowed_payment_file(file.filename):
+        flash("Only png, jpg, jpeg, webp, or pdf files are allowed.", "danger")
+        return redirect(url_for("payment_page"))
+    os.makedirs("uploads/payment_proofs", exist_ok=True)
+    ext = file.filename.rsplit(".", 1)[-1].lower()
+    path = f"uploads/payment_proofs/{g.user['id']}_{uuid.uuid4().hex}.{ext}"
+    file.save(path)
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO payment_requests (user_id, transaction_id, screenshot_path, status) VALUES (%s,%s,%s,'pending')", (g.user["id"], txid, path))
+        cur.execute("UPDATE users SET payment_status='pending' WHERE id=%s", (g.user["id"],))
+    flash("Payment submitted. Status: Payment under review.", "info")
+    return redirect(url_for("payment_page"))
+
 
 @app.route("/admin/users", methods=["GET", "POST"])
 def admin_users():
@@ -3232,6 +3318,34 @@ def admin_users():
             except Exception as e:
                 log.exception("Delete user failed: %s", e)
                 flash("Could not delete user.", "danger")
+        elif action == "set_expiry":
+            user_id = int(request.form.get("user_id") or "0")
+            expiry = datetime.fromisoformat((request.form.get("expiry_date") or "").strip()).replace(tzinfo=timezone.utc)
+            with conn.cursor() as cur:
+                cur.execute("UPDATE users SET subscription_expiry_date=%s, grace_period_end=%s WHERE id=%s", (expiry, expiry + timedelta(days=3), user_id))
+            flash("Subscription expiry updated.", "success")
+        elif action == "approve_payment":
+            req_id = int(request.form.get("request_id") or "0")
+            with conn.cursor() as cur:
+                cur.execute("SELECT user_id FROM payment_requests WHERE id=%s", (req_id,))
+                pr = cur.fetchone()
+                if pr:
+                    cur.execute("SELECT subscription_expiry_date FROM users WHERE id=%s", (pr["user_id"],))
+                    u = cur.fetchone()
+                    base = u["subscription_expiry_date"] or datetime.now(timezone.utc)
+                    new_exp = base + timedelta(days=30)
+                    cur.execute("UPDATE users SET subscription_expiry_date=%s, grace_period_end=%s, payment_status='approved' WHERE id=%s", (new_exp, new_exp + timedelta(days=3), pr["user_id"]))
+                    cur.execute("UPDATE payment_requests SET status='approved', reviewed_at=NOW(), reviewed_by=%s WHERE id=%s", (g.user["id"], req_id))
+            flash("Payment approved and plan extended by 30 days.", "success")
+        elif action == "reject_payment":
+            req_id = int(request.form.get("request_id") or "0")
+            with conn.cursor() as cur:
+                cur.execute("SELECT user_id FROM payment_requests WHERE id=%s", (req_id,))
+                pr = cur.fetchone()
+                if pr:
+                    cur.execute("UPDATE users SET payment_status='rejected' WHERE id=%s", (pr["user_id"],))
+                    cur.execute("UPDATE payment_requests SET status='rejected', reviewed_at=NOW(), reviewed_by=%s, admin_note='Please resubmit payment details.' WHERE id=%s", (g.user["id"], req_id))
+            flash("Payment rejected. User asked to resubmit.", "warning")
 
         return redirect(url_for("admin_users"))
 
@@ -3248,13 +3362,19 @@ def admin_users():
               id,
               username,
               is_active,
-              (current_session_token IS NOT NULL) AS is_logged_in
+              (current_session_token IS NOT NULL) AS is_logged_in,
+              subscription_expiry_date,
+              payment_status
             FROM users
             ORDER BY username
         """)
         users = cur.fetchall()
+        cur.execute("""SELECT pr.id, pr.user_id, u.username, pr.transaction_id, pr.screenshot_path, pr.status, pr.submitted_at
+                       FROM payment_requests pr JOIN users u ON u.id=pr.user_id
+                       WHERE pr.status='pending' ORDER BY pr.submitted_at ASC""")
+        payment_requests = cur.fetchall()
 
-    return render_template("admin_users.html", users=users)
+    return render_template("admin_users.html", users=users, payment_requests=payment_requests)
 
 
 
