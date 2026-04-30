@@ -1838,6 +1838,64 @@ def _send_admin_approval_email(email, token):
 
     log.warning("RESEND_API_KEY not configured. Manual approval for %s: %s", email, approve_url)
     return False
+
+
+def _send_user_welcome_email(email):
+    subject = "Your account has been approved"
+    html_body = (
+        "<p>Hi there,</p>"
+        "<p>Your account has been approved by the admin. Welcome to Pranav Youtube Video Tracker 🎉</p>"
+        "<p>You can now sign in with your Google account.</p>"
+    )
+    text_body = (
+        "Hi there,\n\n"
+        "Your account has been approved by the admin. "
+        "Welcome to Pranav Youtube Video Tracker.\n"
+        "You can now sign in with your Google account."
+    )
+
+    if not RESEND_API_KEY:
+        log.warning("RESEND_API_KEY not configured. Welcome email not sent to %s", email)
+        return False
+
+    try:
+        if resend is not None:
+            resend.api_key = RESEND_API_KEY
+            resend.Emails.send({
+                "from": RESEND_FROM,
+                "to": [email],
+                "subject": subject,
+                "html": html_body,
+            })
+            return True
+
+        resp = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "from": RESEND_FROM,
+                "to": [email],
+                "subject": subject,
+                "text": text_body,
+            },
+            timeout=20,
+        )
+        if 200 <= resp.status_code < 300:
+            return True
+        log.warning(
+            "Welcome email failed for %s: status=%s body=%s",
+            email,
+            resp.status_code,
+            (resp.text or "")[:300],
+        )
+    except Exception as e:
+        log.warning("Welcome email not sent for %s: %s", email, e)
+    return False
+
+
 def _handle_unknown_google_user(conn, email):
     token = secrets.token_urlsafe(32)
     with conn.cursor() as cur:
@@ -1867,6 +1925,7 @@ def approve_google_user(token):
         else:
             cur.execute("INSERT INTO users (username, password_hash, is_active) VALUES (%s, %s, TRUE)", (email, generate_password_hash(secrets.token_urlsafe(24))))
         cur.execute("UPDATE pending_google_approvals SET approved=TRUE, approved_at=NOW() WHERE email=%s", (email,))
+    _send_user_welcome_email(email)
     return "Approved. User can now login with Google.", 200
 
 @app.route("/login/google")
