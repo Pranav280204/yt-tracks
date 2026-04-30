@@ -3269,6 +3269,7 @@ def payment_proof(proof_path):
     return send_from_directory(safe_base, proof_path)
 
 @app.route("/admin/users", methods=["GET", "POST"])
+@login_required
 def admin_users():
     """
     Admin page:
@@ -3280,6 +3281,13 @@ def admin_users():
           * Force logout a user
     """
     conn = db()
+
+    if not g.get("user"):
+        flash("Please login to continue.", "danger")
+        return redirect(url_for("login"))
+    if not g.user.get("is_admin"):
+        flash("Admin access required.", "danger")
+        return redirect(url_for("home"))
 
     if request.method == "POST":
         action = request.form.get("action") or ""
@@ -3420,6 +3428,7 @@ def admin_users():
             flash("Subscription expiry updated.", "success")
         elif action == "approve_payment":
             req_id = int(request.form.get("request_id") or "0")
+            reviewer_id = g.user.get("id")
             with conn.cursor() as cur:
                 cur.execute("SELECT user_id FROM payment_requests WHERE id=%s", (req_id,))
                 pr = cur.fetchone()
@@ -3429,16 +3438,17 @@ def admin_users():
                     base = u["subscription_expiry_date"] or datetime.now(timezone.utc)
                     new_exp = base + timedelta(days=30)
                     cur.execute("UPDATE users SET subscription_expiry_date=%s, grace_period_end=%s, payment_status='approved' WHERE id=%s", (new_exp, new_exp + timedelta(days=3), pr["user_id"]))
-                    cur.execute("UPDATE payment_requests SET status='approved', reviewed_at=NOW(), reviewed_by=%s WHERE id=%s", (g.user["id"], req_id))
+                    cur.execute("UPDATE payment_requests SET status='approved', reviewed_at=NOW(), reviewed_by=%s WHERE id=%s", (reviewer_id, req_id))
             flash("Payment approved and plan extended by 30 days.", "success")
         elif action == "reject_payment":
             req_id = int(request.form.get("request_id") or "0")
+            reviewer_id = g.user.get("id")
             with conn.cursor() as cur:
                 cur.execute("SELECT user_id FROM payment_requests WHERE id=%s", (req_id,))
                 pr = cur.fetchone()
                 if pr:
                     cur.execute("UPDATE users SET payment_status='rejected' WHERE id=%s", (pr["user_id"],))
-                    cur.execute("UPDATE payment_requests SET status='rejected', reviewed_at=NOW(), reviewed_by=%s, admin_note='Please resubmit payment details.' WHERE id=%s", (g.user["id"], req_id))
+                    cur.execute("UPDATE payment_requests SET status='rejected', reviewed_at=NOW(), reviewed_by=%s, admin_note='Please resubmit payment details.' WHERE id=%s", (reviewer_id, req_id))
             flash("Payment rejected. User asked to resubmit.", "warning")
 
         return redirect(url_for("admin_users"))
