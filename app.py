@@ -80,6 +80,8 @@ SMTP_USER = os.getenv("SMTP_USER", "").strip()
 SMTP_PASS = os.getenv("SMTP_PASS", "").strip()
 SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER).strip()
 SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "1").strip() not in {"0", "false", "False"}
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
+RESEND_FROM = os.getenv("RESEND_FROM", SMTP_FROM or "onboarding@resend.dev").strip()
 # MRBeast-specific client (separate API key)
 MRBEAST_API_KEY = os.getenv("MRBEAST_API_KEY", "")
 MRBEAST_CHANNEL_ID = os.getenv("MRBEAST_CHANNEL_ID", "UCX6OQ3DkcsbYNE6H8uQQuVA")
@@ -1849,42 +1851,44 @@ def login():
 
 def _send_admin_approval_email(email, token):
     approve_url = url_for("approve_google_user", token=token, _external=True)
-    if not (SMTP_HOST and SMTP_FROM and ADMIN_APPROVAL_EMAIL):
-        log.warning(
-            "SMTP/admin approval email not configured. Approve manually for %s: %s",
-            email,
-            approve_url,
-        )
+    if not ADMIN_APPROVAL_EMAIL:
+        log.warning("ADMIN_APPROVAL_EMAIL not configured. Manual approval for %s: %s", email, approve_url)
         return False
 
+    subject = "Approve new Google user"
     body = f"Approve Google login for {email}: {approve_url}"
-    msg = f"Subject: Approve new Google user\nFrom: {SMTP_FROM}\nTo: {ADMIN_APPROVAL_EMAIL}\n\n{body}"
-    try:
-        import smtplib
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
-            if SMTP_USE_TLS:
-                s.starttls()
-            if SMTP_USER:
-                s.login(SMTP_USER, SMTP_PASS)
-            s.sendmail(SMTP_FROM, [ADMIN_APPROVAL_EMAIL], msg)
-        return True
-    except OSError as e:
-        log.warning(
-            "Approval email not sent (network/SMTP unreachable) for %s: %s. Manual approval link: %s",
-            email,
-            e,
-            approve_url,
-        )
-        return False
-    except Exception as e:
-        log.warning(
-            "Approval email not sent for %s: %s. Manual approval link: %s",
-            email,
-            e,
-            approve_url,
-        )
+
+    if RESEND_API_KEY:
+        try:
+            resp = requests.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {RESEND_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "from": RESEND_FROM,
+                    "to": [ADMIN_APPROVAL_EMAIL],
+                    "subject": subject,
+                    "text": body,
+                },
+                timeout=20,
+            )
+            if 200 <= resp.status_code < 300:
+                return True
+            log.warning(
+                "Resend email failed for %s: status=%s body=%s. Manual approval link: %s",
+                email,
+                resp.status_code,
+                (resp.text or "")[:300],
+                approve_url,
+            )
+        except Exception as e:
+            log.warning("Resend email not sent for %s: %s. Manual approval link: %s", email, e, approve_url)
         return False
 
+    log.warning("RESEND_API_KEY not configured. Manual approval for %s: %s", email, approve_url)
+    return False
 def _handle_unknown_google_user(conn, email):
     token = secrets.token_urlsafe(32)
     with conn.cursor() as cur:
