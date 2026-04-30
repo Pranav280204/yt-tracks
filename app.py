@@ -1778,75 +1778,9 @@ def login():
         return redirect(url_for("home"))
 
     if request.method == "POST":
-        username = (request.form.get("username") or "").strip()
-        password = request.form.get("password") or ""
+        flash("Username/password login is disabled. Please continue with Google.", "info")
         next_url = request.args.get("next") or url_for("home")
-
-        if not username or not password:
-            flash("Enter username and password.", "warning")
-            return redirect(url_for("login", next=next_url))
-
-        conn = db()
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, username, password_hash, current_session_token, "
-                "is_active, device_token, device_ua, device_info "
-                "FROM users WHERE username=%s",
-                (username,)
-            )
-            user = cur.fetchone()
-
-        # invalid username/password
-        if not user or not check_password_hash(user["password_hash"], password):
-            flash("Invalid credentials.", "danger")
-            return redirect(url_for("login", next=next_url))
-
-        # deactivated user
-        if not user["is_active"]:
-            flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
-            return redirect(url_for("login", next=next_url))
-
-        # ---------- Device lock: mix of cookie token + fingerprint ----------
-        ua_now = request.headers.get("User-Agent", "") or ""
-        cookie_device = request.cookies.get("device_token")
-        stored_device = user.get("device_token")
-        stored_ua = (user.get("device_ua") or "")
-
-        # simple fingerprint now: just user-agent (can extend later)
-        fingerprint_now = ua_now.strip()
-        stored_fingerprint = (user.get("device_info") or "").strip()
-
-        def same_device():
-            # 1) Strong match: cookie token matches DB
-            if stored_device and cookie_device and cookie_device == stored_device:
-                return True
-            # 2) Fallback: UA / fingerprint match (handles cookie cleared on same device)
-            if stored_fingerprint and fingerprint_now and stored_fingerprint == fingerprint_now:
-                return True
-            # 3) If no device stored yet, we will bind below, so not "same"
-            return False
-
-        if stored_device is None:
-            # First login: bind current device
-            new_device_token = secrets.token_hex(32)
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE users SET device_token=%s, device_ua=%s, device_info=%s WHERE id=%s",
-                    (new_device_token, ua_now, fingerprint_now, user["id"])
-                )
-            stored_device = new_device_token
-        else:
-            # Device already bound: ensure this is the same device
-            if not same_device():
-                flash("Login only allowed from your registered device. Contact admin at 1944pranav@gmail.com to reset.", "danger")
-                return redirect(url_for("login", next=next_url))
-
-        # build response so we can set device cookie
-        resp = make_response(_issue_login_session(conn, user["id"], next_url))
-        # keep device cookie valid ~1 year
-        if stored_device:
-            resp.set_cookie("device_token", stored_device, max_age=365*24*3600, httponly=True, samesite="Lax")
-        return resp
+        return redirect(url_for("google_oauth_login", next=next_url))
 
     # GET
     google_enabled = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
@@ -2027,9 +1961,34 @@ def google_callback():
         flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
         return redirect(url_for("login"))
 
+    ua_now = request.headers.get("User-Agent", "") or ""
+    cookie_device = request.cookies.get("device_token")
+    stored_device = user.get("device_token")
+    fingerprint_now = ua_now.strip()
+    stored_fingerprint = (user.get("device_info") or "").strip()
+
+    same_device = bool(
+        (stored_device and cookie_device and cookie_device == stored_device) or
+        (stored_fingerprint and fingerprint_now and stored_fingerprint == fingerprint_now)
+    )
+
+    if stored_device is None:
+        stored_device = secrets.token_hex(32)
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET device_token=%s, device_ua=%s, device_info=%s WHERE id=%s",
+                (stored_device, ua_now, fingerprint_now, user["id"])
+            )
+    elif not same_device:
+        flash("Login only allowed from your registered device. Contact admin at 1944pranav@gmail.com to reset.", "danger")
+        return redirect(url_for("login"))
+
     session.pop("oauth_state", None)
     next_url = session.pop("oauth_next", url_for("home"))
-    return _issue_login_session(conn, user["id"], next_url)
+    resp = make_response(_issue_login_session(conn, user["id"], next_url))
+    if stored_device:
+        resp.set_cookie("device_token", stored_device, max_age=365*24*3600, httponly=True, samesite="Lax")
+    return resp
 
 
 # @app.route("/login/google")  # disabled duplicate route
@@ -2698,7 +2657,7 @@ def google_oauth_callback_view():
     conn = db()
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, is_active FROM users WHERE lower(username)=lower(%s)",
+            "SELECT id, is_active, device_token, device_ua, device_info FROM users WHERE lower(username)=lower(%s)",
             (email,)
         )
         user = cur.fetchone()
@@ -2708,9 +2667,33 @@ def google_oauth_callback_view():
         flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
         return redirect(url_for("login"))
 
+    ua_now = request.headers.get("User-Agent", "") or ""
+    cookie_device = request.cookies.get("device_token")
+    stored_device = user.get("device_token")
+    fingerprint_now = ua_now.strip()
+    stored_fingerprint = (user.get("device_info") or "").strip()
+    same_device = bool(
+        (stored_device and cookie_device and cookie_device == stored_device) or
+        (stored_fingerprint and fingerprint_now and stored_fingerprint == fingerprint_now)
+    )
+
+    if stored_device is None:
+        stored_device = secrets.token_hex(32)
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET device_token=%s, device_ua=%s, device_info=%s WHERE id=%s",
+                (stored_device, ua_now, fingerprint_now, user["id"])
+            )
+    elif not same_device:
+        flash("Login only allowed from your registered device. Contact admin at 1944pranav@gmail.com to reset.", "danger")
+        return redirect(url_for("login"))
+
     session.pop("oauth_state", None)
     next_url = session.pop("oauth_next", url_for("home"))
-    return _issue_login_session(conn, user["id"], next_url)
+    resp = make_response(_issue_login_session(conn, user["id"], next_url))
+    if stored_device:
+        resp.set_cookie("device_token", stored_device, max_age=365*24*3600, httponly=True, samesite="Lax")
+    return resp
 
 
 if "google_oauth_login" not in app.view_functions:
@@ -3114,7 +3097,31 @@ def admin_users():
                 log.exception("Force logout failed: %s", e)
                 flash("Could not log out user.", "danger")
 
+        # 6) DELETE USER (hard delete)
+        elif action == "delete_user":
+            try:
+                user_id = int(request.form.get("user_id") or "0")
+            except ValueError:
+                flash("Invalid user id.", "danger")
+                return redirect(url_for("admin_users"))
+
+            if g.get("user") and user_id == g.user.get("id"):
+                flash("You cannot delete your own currently logged-in account.", "danger")
+                return redirect(url_for("admin_users"))
+
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
+                    if cur.rowcount == 0:
+                        flash("User not found.", "warning")
+                    else:
+                        flash(f"Deleted user id {user_id}.", "info")
+            except Exception as e:
+                log.exception("Delete user failed: %s", e)
+                flash("Could not delete user.", "danger")
+
         return redirect(url_for("admin_users"))
+
 
     # ---------- GET ----------
     # If admin mode not unlocked yet -> show gate page
