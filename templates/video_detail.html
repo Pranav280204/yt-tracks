@@ -89,6 +89,9 @@
     .date-row .btn { min-width:90px; }
     .date-select { min-width:200px; max-width:320px; }
 
+    .day-block { display:none; }
+    .day-block.active { display:block; }
+
     .table thead th { font-size:.9rem; border-bottom:1px solid var(--border); white-space:nowrap; }
     .table td, .table th { vertical-align:middle; font-size:.92rem; border-top:1px solid #fafafa; white-space:nowrap; }
     .table-card { padding:.75rem; border-radius:.5rem; border:1px solid var(--border); background:linear-gradient(180deg,#ffffff,#fbfcff); }
@@ -435,9 +438,6 @@
       const idx = dates.indexOf(date);
       if (prevBtn) prevBtn.disabled = (idx === dates.length - 1) || idx === -1;
       if (nextBtn) nextBtn.disabled = (idx <= 0);
-      if (block) {
-        setTimeout(()=> block.scrollIntoView({behavior:'smooth', block:'start'}), 60);
-      }
     }
 
     if (dateSelect && dateSelect.options.length) {
