@@ -22,8 +22,8 @@ body{background:#111827;color:#e5e7eb}
 
   <div class='panel mb-3'>
     <div class='qr-box mb-3'>
-      <img src='{{ url_for("static", filename="upi-qr.png") }}' class='qr-img' alt='UPI QR Code'>
-      <div class='small text-dark mt-2'>If QR is missing, place your file at <code>static/upi-qr.png</code>.</div>
+      <img src='{{ url_for("static", filename="upi-qr.svg") }}' class='qr-img' alt='UPI QR Code'>
+      <div class='small text-dark mt-2'>If QR is missing, place your file at <code>static/upi-qr.svg</code>.</div>
     </div>
 
     <form method='post' action='{{ url_for("submit_payment") }}' enctype='multipart/form-data'>
