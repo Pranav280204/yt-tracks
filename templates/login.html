@@ -39,19 +39,13 @@
     {% endif %}
   {% endwith %}
 
-  <form method="POST" action="{{ url_for('login', next=request.args.get('next')) }}">
-    <div class="mb-3">
-      <label class="form-label">Username</label>
-      <input class="form-control" type="text" name="username" required autofocus>
-    </div>
-    <div class="mb-3">
-      <label class="form-label">Password</label>
-      <input class="form-control" type="password" name="password" required>
-    </div>
-    <button class="btn btn-warning w-100" type="submit">Login</button>
-  </form>
-  <div class="my-3 text-center text-secondary">or</div>
+  {% if google_enabled %}
   <a class="btn btn-light w-100" href="{{ url_for('google_oauth_login', next=request.args.get('next')) }}">Continue with Google</a>
+  {% else %}
+  <div class="alert alert-warning mb-3" role="alert">
+    Google login is not configured on the server. Please contact admin.
+  </div>
+  {% endif %}
 
   <div class="mt-3 d-grid">
     <a class="btn btn-outline-light btn-sm" href="{{ url_for('admin_users') }}">Admin: Add / Manage Users</a>

@@ -107,6 +107,12 @@
                       <input type="hidden" name="user_id" value="{{ u.id }}">
                       <button class="btn btn-sm btn-outline-secondary" type="submit" {% if not u.is_logged_in %}disabled{% endif %}>Force logout</button>
                     </form>
+
+                    <form method="POST" action="{{ url_for('admin_users') }}" onsubmit="return confirm('Delete this user permanently? This cannot be undone.');">
+                      <input type="hidden" name="action" value="delete_user">
+                      <input type="hidden" name="user_id" value="{{ u.id }}">
+                      <button class="btn btn-sm btn-danger" type="submit">Delete User</button>
+                    </form>
                   </div>
                 </td>
               </tr>

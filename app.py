@@ -5,6 +5,10 @@ import logging
 import time
 # near other imports at top of file
 import requests
+try:
+    import resend
+except Exception:
+    resend = None
 import hashlib
 import json
 import math
@@ -62,9 +66,26 @@ POSTGRES_URL = os.getenv("DATABASE_URL")
 # Reference video id used for 5-min ratio comparison
 REF_COMPARE_VIDEO_ID = "YxWlaYCA8MU"
 ADMIN_CREATE_SECRET = os.getenv("ADMIN_CREATE_SECRET", "")  # master password for creating users
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
-GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
-GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "").strip()
+
+def _first_env(*names):
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return ""
+
+GOOGLE_CLIENT_ID = _first_env("GOOGLE_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = _first_env("GOOGLE_CLIENT_SECRET", "GOOGLE_OAUTH_CLIENT_SECRET")
+GOOGLE_REDIRECT_URI = _first_env("GOOGLE_REDIRECT_URI", "GOOGLE_OAUTH_REDIRECT_URI")
+ADMIN_APPROVAL_EMAIL = os.getenv("ADMIN_APPROVAL_EMAIL", "pranav69632956@gmail.com").strip().lower()
+SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "").strip()
+SMTP_PASS = os.getenv("SMTP_PASS", "").strip()
+SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER).strip()
+SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "1").strip() not in {"0", "false", "False"}
+RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
+RESEND_FROM = os.getenv("RESEND_FROM", SMTP_FROM or "onboarding@resend.dev").strip()
 # MRBeast-specific client (separate API key)
 MRBEAST_API_KEY = os.getenv("MRBEAST_API_KEY", "")
 MRBEAST_CHANNEL_ID = os.getenv("MRBEAST_CHANNEL_ID", "UCX6OQ3DkcsbYNE6H8uQQuVA")
@@ -338,6 +359,16 @@ def init_db():
         cur.execute("""
         ALTER TABLE users
         ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+        """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS pending_google_approvals (
+          email TEXT PRIMARY KEY,
+          requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          approved BOOLEAN NOT NULL DEFAULT FALSE,
+          approved_at TIMESTAMPTZ,
+          token TEXT NOT NULL
+        );
         """)
                 # Channel snapshots ----------------------------------
         cur.execute("""
@@ -1747,81 +1778,97 @@ def login():
         return redirect(url_for("home"))
 
     if request.method == "POST":
-        username = (request.form.get("username") or "").strip()
-        password = request.form.get("password") or ""
+        flash("Username/password login is disabled. Please continue with Google.", "info")
         next_url = request.args.get("next") or url_for("home")
-
-        if not username or not password:
-            flash("Enter username and password.", "warning")
-            return redirect(url_for("login", next=next_url))
-
-        conn = db()
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, username, password_hash, current_session_token, "
-                "is_active, device_token, device_ua, device_info "
-                "FROM users WHERE username=%s",
-                (username,)
-            )
-            user = cur.fetchone()
-
-        # invalid username/password
-        if not user or not check_password_hash(user["password_hash"], password):
-            flash("Invalid credentials.", "danger")
-            return redirect(url_for("login", next=next_url))
-
-        # deactivated user
-        if not user["is_active"]:
-            flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
-            return redirect(url_for("login", next=next_url))
-
-        # ---------- Device lock: mix of cookie token + fingerprint ----------
-        ua_now = request.headers.get("User-Agent", "") or ""
-        cookie_device = request.cookies.get("device_token")
-        stored_device = user.get("device_token")
-        stored_ua = (user.get("device_ua") or "")
-
-        # simple fingerprint now: just user-agent (can extend later)
-        fingerprint_now = ua_now.strip()
-        stored_fingerprint = (user.get("device_info") or "").strip()
-
-        def same_device():
-            # 1) Strong match: cookie token matches DB
-            if stored_device and cookie_device and cookie_device == stored_device:
-                return True
-            # 2) Fallback: UA / fingerprint match (handles cookie cleared on same device)
-            if stored_fingerprint and fingerprint_now and stored_fingerprint == fingerprint_now:
-                return True
-            # 3) If no device stored yet, we will bind below, so not "same"
-            return False
-
-        if stored_device is None:
-            # First login: bind current device
-            new_device_token = secrets.token_hex(32)
-            with conn.cursor() as cur:
-                cur.execute(
-                    "UPDATE users SET device_token=%s, device_ua=%s, device_info=%s WHERE id=%s",
-                    (new_device_token, ua_now, fingerprint_now, user["id"])
-                )
-            stored_device = new_device_token
-        else:
-            # Device already bound: ensure this is the same device
-            if not same_device():
-                flash("Login only allowed from your registered device. Contact admin at 1944pranav@gmail.com to reset.", "danger")
-                return redirect(url_for("login", next=next_url))
-
-        # build response so we can set device cookie
-        resp = make_response(_issue_login_session(conn, user["id"], next_url))
-        # keep device cookie valid ~1 year
-        if stored_device:
-            resp.set_cookie("device_token", stored_device, max_age=365*24*3600, httponly=True, samesite="Lax")
-        return resp
+        return redirect(url_for("google_oauth_login", next=next_url))
 
     # GET
     google_enabled = bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET)
     return render_template("login.html", google_enabled=google_enabled)
 
 
+def _send_admin_approval_email(email, token):
+    approve_url = url_for("approve_google_user", token=token, _external=True)
+    if not ADMIN_APPROVAL_EMAIL:
+        log.warning("ADMIN_APPROVAL_EMAIL not configured. Manual approval for %s: %s", email, approve_url)
+        return False
+
+    subject = "Approve new Google user"
+    body = f"Approve Google login for {email}: {approve_url}"
+
+    if RESEND_API_KEY:
+        try:
+            if resend is not None:
+                resend.api_key = RESEND_API_KEY
+                resend.Emails.send({
+                    "from": RESEND_FROM,
+                    "to": [ADMIN_APPROVAL_EMAIL],
+                    "subject": subject,
+                    "html": f"<p>Approve Google login for <strong>{email}</strong>: <a href=\"{approve_url}\">Approve user</a></p>",
+                })
+                return True
+
+            # Fallback to HTTP API when resend SDK is not installed
+            resp = requests.post(
+                "https://api.resend.com/emails",
+                headers={
+                    "Authorization": f"Bearer {RESEND_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "from": RESEND_FROM,
+                    "to": [ADMIN_APPROVAL_EMAIL],
+                    "subject": subject,
+                    "text": body,
+                },
+                timeout=20,
+            )
+            if 200 <= resp.status_code < 300:
+                return True
+            log.warning(
+                "Resend email failed for %s: status=%s body=%s. Manual approval link: %s",
+                email,
+                resp.status_code,
+                (resp.text or "")[:300],
+                approve_url,
+            )
+        except Exception as e:
+            log.warning("Resend email not sent for %s: %s. Manual approval link: %s", email, e, approve_url)
+        return False
+
+    log.warning("RESEND_API_KEY not configured. Manual approval for %s: %s", email, approve_url)
+    return False
+def _handle_unknown_google_user(conn, email):
+    token = secrets.token_urlsafe(32)
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO pending_google_approvals (email, token, requested_at, approved)
+            VALUES (%s, %s, NOW(), FALSE)
+            ON CONFLICT (email)
+            DO UPDATE SET token=EXCLUDED.token, requested_at=NOW(), approved=FALSE, approved_at=NULL
+        """, (email, token))
+    _send_admin_approval_email(email, token)
+    flash("Your Google account needs admin approval. We emailed the admin for confirmation.", "warning")
+    return redirect(url_for("login"))
+
+@app.route("/admin/approve-google/<token>")
+def approve_google_user(token):
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("SELECT email FROM pending_google_approvals WHERE token=%s", (token,))
+        row = cur.fetchone()
+        if not row:
+            return "Invalid or expired token", 404
+        email = row["email"].strip().lower()
+        cur.execute("SELECT id FROM users WHERE lower(username)=lower(%s)", (email,))
+        existing = cur.fetchone()
+        if existing:
+            cur.execute("UPDATE users SET is_active=TRUE WHERE id=%s", (existing["id"],))
+        else:
+            cur.execute("INSERT INTO users (username, password_hash, is_active) VALUES (%s, %s, TRUE)", (email, generate_password_hash(secrets.token_urlsafe(24))))
+        cur.execute("UPDATE pending_google_approvals SET approved=TRUE, approved_at=NOW() WHERE email=%s", (email,))
+    return "Approved. User can now login with Google.", 200
+
 @app.route("/login/google")
 def login_google():
     if g.get("user"):
@@ -1909,18 +1956,42 @@ def google_callback():
         )
         user = cur.fetchone()
     if not user:
-        flash("This Google account is not allowed. Ask admin to add this email as a user.", "danger")
-        return redirect(url_for("login"))
+        return _handle_unknown_google_user(conn, email)
     if not user["is_active"]:
         flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
         return redirect(url_for("login"))
 
+    ua_now = request.headers.get("User-Agent", "") or ""
+    cookie_device = request.cookies.get("device_token")
+    stored_device = user.get("device_token")
+    fingerprint_now = ua_now.strip()
+    stored_fingerprint = (user.get("device_info") or "").strip()
+
+    same_device = bool(
+        (stored_device and cookie_device and cookie_device == stored_device) or
+        (stored_fingerprint and fingerprint_now and stored_fingerprint == fingerprint_now)
+    )
+
+    if stored_device is None:
+        stored_device = secrets.token_hex(32)
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET device_token=%s, device_ua=%s, device_info=%s WHERE id=%s",
+                (stored_device, ua_now, fingerprint_now, user["id"])
+            )
+    elif not same_device:
+        flash("Login only allowed from your registered device. Contact admin at 1944pranav@gmail.com to reset.", "danger")
+        return redirect(url_for("login"))
+
     session.pop("oauth_state", None)
     next_url = session.pop("oauth_next", url_for("home"))
-    return _issue_login_session(conn, user["id"], next_url)
+    resp = make_response(_issue_login_session(conn, user["id"], next_url))
+    if stored_device:
+        resp.set_cookie("device_token", stored_device, max_age=365*24*3600, httponly=True, samesite="Lax")
+    return resp
 
 
-@app.route("/login/google")
+# @app.route("/login/google")  # disabled duplicate route
 def login_google():
     if g.get("user"):
         return redirect(url_for("home"))
@@ -1945,7 +2016,7 @@ def login_google():
     return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + requests.compat.urlencode(params))
 
 
-@app.route("/auth/google/callback")
+# @app.route("/auth/google/callback")  # disabled duplicate route
 def google_callback():
     expected_state = session.get("oauth_state")
     got_state = request.args.get("state")
@@ -2007,8 +2078,7 @@ def google_callback():
         )
         user = cur.fetchone()
     if not user:
-        flash("This Google account is not allowed. Ask admin to add this email as a user.", "danger")
-        return redirect(url_for("login"))
+        return _handle_unknown_google_user(conn, email)
     if not user["is_active"]:
         flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
         return redirect(url_for("login"))
@@ -2103,8 +2173,7 @@ def google_callback():
         )
         user = cur.fetchone()
     if not user:
-        flash("This Google account is not allowed. Ask admin to add this email as a user.", "danger")
-        return redirect(url_for("login"))
+        return _handle_unknown_google_user(conn, email)
     if not user["is_active"]:
         flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
         return redirect(url_for("login"))
@@ -2120,7 +2189,7 @@ if "google_callback" not in app.view_functions:
     app.add_url_rule("/auth/google/callback", endpoint="google_callback", view_func=google_callback)
 
 
-@app.route("/login/google", endpoint="google_oauth_login")
+# @app.route("/login/google", endpoint="google_oauth_login")  # disabled duplicate route
 def login_google():
     if g.get("user"):
         return redirect(url_for("home"))
@@ -2145,7 +2214,7 @@ def login_google():
     return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + requests.compat.urlencode(params))
 
 
-@app.route("/auth/google/callback", endpoint="google_oauth_callback")
+# @app.route("/auth/google/callback", endpoint="google_oauth_callback")  # disabled duplicate route
 def google_callback():
     expected_state = session.get("oauth_state")
     got_state = request.args.get("state")
@@ -2207,8 +2276,7 @@ def google_callback():
         )
         user = cur.fetchone()
     if not user:
-        flash("This Google account is not allowed. Ask admin to add this email as a user.", "danger")
-        return redirect(url_for("login"))
+        return _handle_unknown_google_user(conn, email)
     if not user["is_active"]:
         flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
         return redirect(url_for("login"))
@@ -2217,7 +2285,7 @@ def google_callback():
     next_url = session.pop("oauth_next", url_for("home"))
     return _issue_login_session(conn, user["id"], next_url)
 
-@app.route("/login/google", endpoint="google_oauth_login")
+# @app.route("/login/google", endpoint="google_oauth_login")  # disabled duplicate route
 def google_oauth_login_view():
     if g.get("user"):
         return redirect(url_for("home"))
@@ -2242,7 +2310,7 @@ def google_oauth_login_view():
     return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + requests.compat.urlencode(params))
 
 
-@app.route("/auth/google/callback", endpoint="google_oauth_callback")
+# @app.route("/auth/google/callback", endpoint="google_oauth_callback")  # disabled duplicate route
 def google_oauth_callback_view():
     expected_state = session.get("oauth_state")
     got_state = request.args.get("state")
@@ -2304,8 +2372,7 @@ def google_oauth_callback_view():
         )
         user = cur.fetchone()
     if not user:
-        flash("This Google account is not allowed. Ask admin to add this email as a user.", "danger")
-        return redirect(url_for("login"))
+        return _handle_unknown_google_user(conn, email)
     if not user["is_active"]:
         flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
         return redirect(url_for("login"))
@@ -2314,9 +2381,7 @@ def google_oauth_callback_view():
     next_url = session.pop("oauth_next", url_for("home"))
     return _issue_login_session(conn, user["id"], next_url)
 
-app.view_functions.pop("login_google", None)
-app.view_functions.pop("google_callback", None)
-@app.route("/login/google", endpoint="google_oauth_login")
+# @app.route("/login/google", endpoint="google_oauth_login")  # disabled duplicate route
 def google_oauth_login_view():
     if g.get("user"):
         return redirect(url_for("home"))
@@ -2341,7 +2406,7 @@ def google_oauth_login_view():
     return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + requests.compat.urlencode(params))
 
 
-@app.route("/auth/google/callback", endpoint="google_oauth_callback")
+# @app.route("/auth/google/callback", endpoint="google_oauth_callback")  # disabled duplicate route
 def google_oauth_callback_view():
     expected_state = session.get("oauth_state")
     got_state = request.args.get("state")
@@ -2403,8 +2468,7 @@ def google_oauth_callback_view():
         )
         user = cur.fetchone()
     if not user:
-        flash("This Google account is not allowed. Ask admin to add this email as a user.", "danger")
-        return redirect(url_for("login"))
+        return _handle_unknown_google_user(conn, email)
     if not user["is_active"]:
         flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
         return redirect(url_for("login"))
@@ -2413,8 +2477,6 @@ def google_oauth_callback_view():
     next_url = session.pop("oauth_next", url_for("home"))
     return _issue_login_session(conn, user["id"], next_url)
 
-app.view_functions.pop("login_google", None)
-app.view_functions.pop("google_callback", None)
 def google_oauth_login_view():
     if g.get("user"):
         return redirect(url_for("home"))
@@ -2500,8 +2562,7 @@ def google_oauth_callback_view():
         )
         user = cur.fetchone()
     if not user:
-        flash("This Google account is not allowed. Ask admin to add this email as a user.", "danger")
-        return redirect(url_for("login"))
+        return _handle_unknown_google_user(conn, email)
     if not user["is_active"]:
         flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
         return redirect(url_for("login"))
@@ -2516,8 +2577,6 @@ if "google_oauth_login" not in app.view_functions:
 if "google_oauth_callback" not in app.view_functions:
     app.add_url_rule("/auth/google/callback", endpoint="google_oauth_callback", view_func=google_oauth_callback_view)
 
-app.view_functions.pop("login_google", None)
-app.view_functions.pop("google_callback", None)
 def google_oauth_login_view():
     if g.get("user"):
         return redirect(url_for("home"))
@@ -2598,20 +2657,43 @@ def google_oauth_callback_view():
     conn = db()
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, is_active FROM users WHERE lower(username)=lower(%s)",
+            "SELECT id, is_active, device_token, device_ua, device_info FROM users WHERE lower(username)=lower(%s)",
             (email,)
         )
         user = cur.fetchone()
     if not user:
-        flash("This Google account is not allowed. Ask admin to add this email as a user.", "danger")
-        return redirect(url_for("login"))
+        return _handle_unknown_google_user(conn, email)
     if not user["is_active"]:
         flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
         return redirect(url_for("login"))
 
+    ua_now = request.headers.get("User-Agent", "") or ""
+    cookie_device = request.cookies.get("device_token")
+    stored_device = user.get("device_token")
+    fingerprint_now = ua_now.strip()
+    stored_fingerprint = (user.get("device_info") or "").strip()
+    same_device = bool(
+        (stored_device and cookie_device and cookie_device == stored_device) or
+        (stored_fingerprint and fingerprint_now and stored_fingerprint == fingerprint_now)
+    )
+
+    if stored_device is None:
+        stored_device = secrets.token_hex(32)
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE users SET device_token=%s, device_ua=%s, device_info=%s WHERE id=%s",
+                (stored_device, ua_now, fingerprint_now, user["id"])
+            )
+    elif not same_device:
+        flash("Login only allowed from your registered device. Contact admin at 1944pranav@gmail.com to reset.", "danger")
+        return redirect(url_for("login"))
+
     session.pop("oauth_state", None)
     next_url = session.pop("oauth_next", url_for("home"))
-    return _issue_login_session(conn, user["id"], next_url)
+    resp = make_response(_issue_login_session(conn, user["id"], next_url))
+    if stored_device:
+        resp.set_cookie("device_token", stored_device, max_age=365*24*3600, httponly=True, samesite="Lax")
+    return resp
 
 
 if "google_oauth_login" not in app.view_functions:
@@ -3015,7 +3097,31 @@ def admin_users():
                 log.exception("Force logout failed: %s", e)
                 flash("Could not log out user.", "danger")
 
+        # 6) DELETE USER (hard delete)
+        elif action == "delete_user":
+            try:
+                user_id = int(request.form.get("user_id") or "0")
+            except ValueError:
+                flash("Invalid user id.", "danger")
+                return redirect(url_for("admin_users"))
+
+            if g.get("user") and user_id == g.user.get("id"):
+                flash("You cannot delete your own currently logged-in account.", "danger")
+                return redirect(url_for("admin_users"))
+
+            try:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
+                    if cur.rowcount == 0:
+                        flash("User not found.", "warning")
+                    else:
+                        flash(f"Deleted user id {user_id}.", "info")
+            except Exception as e:
+                log.exception("Delete user failed: %s", e)
+                flash("Could not delete user.", "danger")
+
         return redirect(url_for("admin_users"))
+
 
     # ---------- GET ----------
     # If admin mode not unlocked yet -> show gate page
