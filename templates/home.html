@@ -136,7 +136,7 @@
   {% if subscription_info and (subscription_info.days_left <= 1 or subscription_info.in_grace) %}
     <div class="alert {{ 'alert-warning' if subscription_info.in_grace else 'alert-info' }} mb-3" role="alert">
       {% if subscription_info.in_grace %}
-        Your plan has expired. Renew the plan within 3 days.
+        Your plan has expired. Renew the plan within <strong>{{ subscription_info.grace_days_left }}</strong> day(s).
       {% else %}
         Your plan expires in <strong>{{ subscription_info.days_left }}</strong> day(s).
       {% endif %}
