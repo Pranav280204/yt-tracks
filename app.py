@@ -62,6 +62,9 @@ POSTGRES_URL = os.getenv("DATABASE_URL")
 # Reference video id used for 5-min ratio comparison
 REF_COMPARE_VIDEO_ID = "YxWlaYCA8MU"
 ADMIN_CREATE_SECRET = os.getenv("ADMIN_CREATE_SECRET", "")  # master password for creating users
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "").strip()
 # MRBeast-specific client (separate API key)
 MRBEAST_API_KEY = os.getenv("MRBEAST_API_KEY", "")
 MRBEAST_CHANNEL_ID = os.getenv("MRBEAST_CHANNEL_ID", "UCX6OQ3DkcsbYNE6H8uQQuVA")
@@ -547,6 +550,22 @@ def login_required(f):
             return redirect(url_for("login", next=request.path))
         return f(*args, **kwargs)
     return wrapper
+
+
+def _issue_login_session(conn, user_id: int, next_url: str):
+    """Create a fresh session token and sign user in."""
+    session_token = secrets.token_hex(32)
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE users SET current_session_token=%s WHERE id=%s",
+            (session_token, user_id)
+        )
+
+    session.clear()
+    session.permanent = True
+    session["user_id"] = user_id
+    session["session_token"] = session_token
+    return redirect(next_url)
 
 # -----------------------------
 # YouTube helpers
@@ -1791,22 +1810,8 @@ def login():
                 flash("Login only allowed from your registered device. Contact admin at 1944pranav@gmail.com to reset.", "danger")
                 return redirect(url_for("login", next=next_url))
 
-        # ---------- Session token: latest login wins (on this device) ----------
-        session_token = secrets.token_hex(32)
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE users SET current_session_token=%s WHERE id=%s",
-                (session_token, user["id"])
-            )
-
-        # 👇 IMPORTANT: make session persistent
-        session.clear()
-        session.permanent = True          # <--- add this line
-        session["user_id"] = user["id"]
-        session["session_token"] = session_token
-
         # build response so we can set device cookie
-        resp = make_response(redirect(next_url))
+        resp = make_response(_issue_login_session(conn, user["id"], next_url))
         # keep device cookie valid ~1 year
         if stored_device:
             resp.set_cookie("device_token", stored_device, max_age=365*24*3600, httponly=True, samesite="Lax")
@@ -1815,6 +1820,109 @@ def login():
     # GET
     return render_template("login.html")
 
+
+app.view_functions.pop("login_google", None)
+app.view_functions.pop("google_callback", None)
+def google_oauth_login_view():
+    if g.get("user"):
+        return redirect(url_for("home"))
+    if not (GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET):
+        flash("Google login is not configured on the server.", "danger")
+        return redirect(url_for("login"))
+
+    next_url = request.args.get("next") or url_for("home")
+    state = secrets.token_urlsafe(24)
+    session["oauth_state"] = state
+    session["oauth_next"] = next_url
+    redirect_uri = GOOGLE_REDIRECT_URI or url_for("google_oauth_callback", _external=True)
+    params = {
+        "client_id": GOOGLE_CLIENT_ID,
+        "redirect_uri": redirect_uri,
+        "response_type": "code",
+        "scope": "openid email profile",
+        "state": state,
+        "access_type": "online",
+        "prompt": "select_account",
+    }
+    return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + requests.compat.urlencode(params))
+
+
+def google_oauth_callback_view():
+    expected_state = session.get("oauth_state")
+    got_state = request.args.get("state")
+    if not expected_state or got_state != expected_state:
+        flash("Google login failed (invalid state). Try again.", "danger")
+        return redirect(url_for("login"))
+
+    code = request.args.get("code")
+    if not code:
+        flash("Google login failed (missing authorization code).", "danger")
+        return redirect(url_for("login"))
+
+    redirect_uri = GOOGLE_REDIRECT_URI or url_for("google_oauth_callback", _external=True)
+    token_resp = requests.post(
+        "https://oauth2.googleapis.com/token",
+        data={
+            "code": code,
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "redirect_uri": redirect_uri,
+            "grant_type": "authorization_code",
+        },
+        timeout=15,
+    )
+    if token_resp.status_code != 200:
+        flash("Google login failed while exchanging token.", "danger")
+        return redirect(url_for("login"))
+
+    token_data = token_resp.json()
+    id_token = token_data.get("id_token")
+    if not id_token:
+        flash("Google login failed (no ID token).", "danger")
+        return redirect(url_for("login"))
+
+    userinfo_resp = requests.get(
+        "https://oauth2.googleapis.com/tokeninfo",
+        params={"id_token": id_token},
+        timeout=15,
+    )
+    if userinfo_resp.status_code != 200:
+        flash("Google login failed while validating identity.", "danger")
+        return redirect(url_for("login"))
+
+    info = userinfo_resp.json()
+    if info.get("aud") != GOOGLE_CLIENT_ID:
+        flash("Google login failed (invalid token audience).", "danger")
+        return redirect(url_for("login"))
+    email = (info.get("email") or "").strip().lower()
+    email_verified = str(info.get("email_verified", "")).lower() in {"true", "1"}
+    if not email or not email_verified:
+        flash("Google account email is missing or not verified.", "danger")
+        return redirect(url_for("login"))
+
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT id, is_active FROM users WHERE lower(username)=lower(%s)",
+            (email,)
+        )
+        user = cur.fetchone()
+    if not user:
+        flash("This Google account is not allowed. Ask admin to add this email as a user.", "danger")
+        return redirect(url_for("login"))
+    if not user["is_active"]:
+        flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
+        return redirect(url_for("login"))
+
+    session.pop("oauth_state", None)
+    next_url = session.pop("oauth_next", url_for("home"))
+    return _issue_login_session(conn, user["id"], next_url)
+
+
+if "google_oauth_login" not in app.view_functions:
+    app.add_url_rule("/login/google", endpoint="google_oauth_login", view_func=google_oauth_login_view)
+if "google_oauth_callback" not in app.view_functions:
+    app.add_url_rule("/auth/google/callback", endpoint="google_oauth_callback", view_func=google_oauth_callback_view)
 
 
 # -----------------------------
