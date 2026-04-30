@@ -62,9 +62,24 @@ POSTGRES_URL = os.getenv("DATABASE_URL")
 # Reference video id used for 5-min ratio comparison
 REF_COMPARE_VIDEO_ID = "YxWlaYCA8MU"
 ADMIN_CREATE_SECRET = os.getenv("ADMIN_CREATE_SECRET", "")  # master password for creating users
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
-GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
-GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "").strip()
+
+def _first_env(*names):
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return ""
+
+GOOGLE_CLIENT_ID = _first_env("GOOGLE_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = _first_env("GOOGLE_CLIENT_SECRET", "GOOGLE_OAUTH_CLIENT_SECRET")
+GOOGLE_REDIRECT_URI = _first_env("GOOGLE_REDIRECT_URI", "GOOGLE_OAUTH_REDIRECT_URI")
+ADMIN_APPROVAL_EMAIL = os.getenv("ADMIN_APPROVAL_EMAIL", "pranav69632956@gmail.com").strip().lower()
+SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "").strip()
+SMTP_PASS = os.getenv("SMTP_PASS", "").strip()
+SMTP_FROM = os.getenv("SMTP_FROM", SMTP_USER).strip()
+SMTP_USE_TLS = os.getenv("SMTP_USE_TLS", "1").strip() not in {"0", "false", "False"}
 # MRBeast-specific client (separate API key)
 MRBEAST_API_KEY = os.getenv("MRBEAST_API_KEY", "")
 MRBEAST_CHANNEL_ID = os.getenv("MRBEAST_CHANNEL_ID", "UCX6OQ3DkcsbYNE6H8uQQuVA")
@@ -338,6 +353,16 @@ def init_db():
         cur.execute("""
         ALTER TABLE users
         ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;
+        """)
+
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS pending_google_approvals (
+          email TEXT PRIMARY KEY,
+          requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          approved BOOLEAN NOT NULL DEFAULT FALSE,
+          approved_at TIMESTAMPTZ,
+          token TEXT NOT NULL
+        );
         """)
                 # Channel snapshots ----------------------------------
         cur.execute("""
@@ -1822,6 +1847,57 @@ def login():
     return render_template("login.html", google_enabled=google_enabled)
 
 
+def _send_admin_approval_email(email, token):
+    if not (SMTP_HOST and SMTP_FROM and ADMIN_APPROVAL_EMAIL):
+        log.warning("SMTP/admin approval email not configured; cannot send approval email for %s", email)
+        return False
+    approve_url = url_for("approve_google_user", token=token, _external=True)
+    body = f"Approve Google login for {email}: {approve_url}"
+    msg = f"Subject: Approve new Google user\nFrom: {SMTP_FROM}\nTo: {ADMIN_APPROVAL_EMAIL}\n\n{body}"
+    try:
+        import smtplib
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=20) as s:
+            if SMTP_USE_TLS:
+                s.starttls()
+            if SMTP_USER:
+                s.login(SMTP_USER, SMTP_PASS)
+            s.sendmail(SMTP_FROM, [ADMIN_APPROVAL_EMAIL], msg)
+        return True
+    except Exception as e:
+        log.exception("Failed to send approval email: %s", e)
+        return False
+
+def _handle_unknown_google_user(conn, email):
+    token = secrets.token_urlsafe(32)
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO pending_google_approvals (email, token, requested_at, approved)
+            VALUES (%s, %s, NOW(), FALSE)
+            ON CONFLICT (email)
+            DO UPDATE SET token=EXCLUDED.token, requested_at=NOW(), approved=FALSE, approved_at=NULL
+        """, (email, token))
+    _send_admin_approval_email(email, token)
+    flash("Your Google account needs admin approval. We emailed the admin for confirmation.", "warning")
+    return redirect(url_for("login"))
+
+@app.route("/admin/approve-google/<token>")
+def approve_google_user(token):
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("SELECT email FROM pending_google_approvals WHERE token=%s", (token,))
+        row = cur.fetchone()
+        if not row:
+            return "Invalid or expired token", 404
+        email = row["email"].strip().lower()
+        cur.execute("SELECT id FROM users WHERE lower(username)=lower(%s)", (email,))
+        existing = cur.fetchone()
+        if existing:
+            cur.execute("UPDATE users SET is_active=TRUE WHERE id=%s", (existing["id"],))
+        else:
+            cur.execute("INSERT INTO users (username, password_hash, is_active) VALUES (%s, %s, TRUE)", (email, generate_password_hash(secrets.token_urlsafe(24))))
+        cur.execute("UPDATE pending_google_approvals SET approved=TRUE, approved_at=NOW() WHERE email=%s", (email,))
+    return "Approved. User can now login with Google.", 200
+
 @app.route("/login/google")
 def login_google():
     if g.get("user"):
@@ -1909,8 +1985,7 @@ def google_callback():
         )
         user = cur.fetchone()
     if not user:
-        flash("This Google account is not allowed. Ask admin to add this email as a user.", "danger")
-        return redirect(url_for("login"))
+        return _handle_unknown_google_user(conn, email)
     if not user["is_active"]:
         flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
         return redirect(url_for("login"))
@@ -1920,7 +1995,7 @@ def google_callback():
     return _issue_login_session(conn, user["id"], next_url)
 
 
-@app.route("/login/google")
+# @app.route("/login/google")  # disabled duplicate route
 def login_google():
     if g.get("user"):
         return redirect(url_for("home"))
@@ -1945,7 +2020,7 @@ def login_google():
     return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + requests.compat.urlencode(params))
 
 
-@app.route("/auth/google/callback")
+# @app.route("/auth/google/callback")  # disabled duplicate route
 def google_callback():
     expected_state = session.get("oauth_state")
     got_state = request.args.get("state")
@@ -2007,8 +2082,7 @@ def google_callback():
         )
         user = cur.fetchone()
     if not user:
-        flash("This Google account is not allowed. Ask admin to add this email as a user.", "danger")
-        return redirect(url_for("login"))
+        return _handle_unknown_google_user(conn, email)
     if not user["is_active"]:
         flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
         return redirect(url_for("login"))
@@ -2103,8 +2177,7 @@ def google_callback():
         )
         user = cur.fetchone()
     if not user:
-        flash("This Google account is not allowed. Ask admin to add this email as a user.", "danger")
-        return redirect(url_for("login"))
+        return _handle_unknown_google_user(conn, email)
     if not user["is_active"]:
         flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
         return redirect(url_for("login"))
@@ -2120,7 +2193,7 @@ if "google_callback" not in app.view_functions:
     app.add_url_rule("/auth/google/callback", endpoint="google_callback", view_func=google_callback)
 
 
-@app.route("/login/google", endpoint="google_oauth_login")
+# @app.route("/login/google", endpoint="google_oauth_login")  # disabled duplicate route
 def login_google():
     if g.get("user"):
         return redirect(url_for("home"))
@@ -2145,7 +2218,7 @@ def login_google():
     return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + requests.compat.urlencode(params))
 
 
-@app.route("/auth/google/callback", endpoint="google_oauth_callback")
+# @app.route("/auth/google/callback", endpoint="google_oauth_callback")  # disabled duplicate route
 def google_callback():
     expected_state = session.get("oauth_state")
     got_state = request.args.get("state")
@@ -2207,8 +2280,7 @@ def google_callback():
         )
         user = cur.fetchone()
     if not user:
-        flash("This Google account is not allowed. Ask admin to add this email as a user.", "danger")
-        return redirect(url_for("login"))
+        return _handle_unknown_google_user(conn, email)
     if not user["is_active"]:
         flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
         return redirect(url_for("login"))
@@ -2217,7 +2289,7 @@ def google_callback():
     next_url = session.pop("oauth_next", url_for("home"))
     return _issue_login_session(conn, user["id"], next_url)
 
-@app.route("/login/google", endpoint="google_oauth_login")
+# @app.route("/login/google", endpoint="google_oauth_login")  # disabled duplicate route
 def google_oauth_login_view():
     if g.get("user"):
         return redirect(url_for("home"))
@@ -2242,7 +2314,7 @@ def google_oauth_login_view():
     return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + requests.compat.urlencode(params))
 
 
-@app.route("/auth/google/callback", endpoint="google_oauth_callback")
+# @app.route("/auth/google/callback", endpoint="google_oauth_callback")  # disabled duplicate route
 def google_oauth_callback_view():
     expected_state = session.get("oauth_state")
     got_state = request.args.get("state")
@@ -2304,8 +2376,7 @@ def google_oauth_callback_view():
         )
         user = cur.fetchone()
     if not user:
-        flash("This Google account is not allowed. Ask admin to add this email as a user.", "danger")
-        return redirect(url_for("login"))
+        return _handle_unknown_google_user(conn, email)
     if not user["is_active"]:
         flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
         return redirect(url_for("login"))
@@ -2314,9 +2385,7 @@ def google_oauth_callback_view():
     next_url = session.pop("oauth_next", url_for("home"))
     return _issue_login_session(conn, user["id"], next_url)
 
-app.view_functions.pop("login_google", None)
-app.view_functions.pop("google_callback", None)
-@app.route("/login/google", endpoint="google_oauth_login")
+# @app.route("/login/google", endpoint="google_oauth_login")  # disabled duplicate route
 def google_oauth_login_view():
     if g.get("user"):
         return redirect(url_for("home"))
@@ -2341,7 +2410,7 @@ def google_oauth_login_view():
     return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + requests.compat.urlencode(params))
 
 
-@app.route("/auth/google/callback", endpoint="google_oauth_callback")
+# @app.route("/auth/google/callback", endpoint="google_oauth_callback")  # disabled duplicate route
 def google_oauth_callback_view():
     expected_state = session.get("oauth_state")
     got_state = request.args.get("state")
@@ -2403,8 +2472,7 @@ def google_oauth_callback_view():
         )
         user = cur.fetchone()
     if not user:
-        flash("This Google account is not allowed. Ask admin to add this email as a user.", "danger")
-        return redirect(url_for("login"))
+        return _handle_unknown_google_user(conn, email)
     if not user["is_active"]:
         flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
         return redirect(url_for("login"))
@@ -2413,8 +2481,6 @@ def google_oauth_callback_view():
     next_url = session.pop("oauth_next", url_for("home"))
     return _issue_login_session(conn, user["id"], next_url)
 
-app.view_functions.pop("login_google", None)
-app.view_functions.pop("google_callback", None)
 def google_oauth_login_view():
     if g.get("user"):
         return redirect(url_for("home"))
@@ -2500,8 +2566,7 @@ def google_oauth_callback_view():
         )
         user = cur.fetchone()
     if not user:
-        flash("This Google account is not allowed. Ask admin to add this email as a user.", "danger")
-        return redirect(url_for("login"))
+        return _handle_unknown_google_user(conn, email)
     if not user["is_active"]:
         flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
         return redirect(url_for("login"))
@@ -2516,8 +2581,6 @@ if "google_oauth_login" not in app.view_functions:
 if "google_oauth_callback" not in app.view_functions:
     app.add_url_rule("/auth/google/callback", endpoint="google_oauth_callback", view_func=google_oauth_callback_view)
 
-app.view_functions.pop("login_google", None)
-app.view_functions.pop("google_callback", None)
 def google_oauth_login_view():
     if g.get("user"):
         return redirect(url_for("home"))
@@ -2603,8 +2666,7 @@ def google_oauth_callback_view():
         )
         user = cur.fetchone()
     if not user:
-        flash("This Google account is not allowed. Ask admin to add this email as a user.", "danger")
-        return redirect(url_for("login"))
+        return _handle_unknown_google_user(conn, email)
     if not user["is_active"]:
         flash("Your account is deactivated. Contact admin at 1944pranav@gmail.com.", "danger")
         return redirect(url_for("login"))
