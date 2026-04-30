@@ -613,7 +613,8 @@ def load_user():
     days_left = (expiry.date() - now.date()).days
     in_grace = now > expiry and now <= grace_end
     expired_blocked = now > grace_end
-    g.subscription = {"expiry": expiry, "grace_end": grace_end, "days_left": days_left, "in_grace": in_grace, "expired_blocked": expired_blocked}
+    grace_days_left = max((grace_end.date() - now.date()).days, 0) if in_grace else 0
+    g.subscription = {"expiry": expiry, "grace_end": grace_end, "days_left": days_left, "in_grace": in_grace, "grace_days_left": grace_days_left, "expired_blocked": expired_blocked}
 
     if request.endpoint and request.endpoint not in {"login", "logout", "static", "payment_page", "submit_payment", "google_oauth_login", "google_oauth_callback", "approve_google_user", "admin_users"}:
         if expired_blocked or g.user.get("payment_status") == "pending":
