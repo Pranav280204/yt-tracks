@@ -3256,7 +3256,7 @@ def submit_payment():
 @app.get("/payment-proof/<path:proof_path>")
 @login_required
 def payment_proof(proof_path):
-    if not g.user.get("is_admin"):
+    if not session.get("admin_ok"):
         abort(403)
 
     safe_base = os.path.abspath("uploads/payment_proofs")
@@ -3285,9 +3285,6 @@ def admin_users():
     if not g.get("user"):
         flash("Please login to continue.", "danger")
         return redirect(url_for("login"))
-    if not g.user.get("is_admin"):
-        flash("Admin access required.", "danger")
-        return redirect(url_for("home"))
 
     if request.method == "POST":
         action = request.form.get("action") or ""
