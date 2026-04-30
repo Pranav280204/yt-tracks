@@ -62,9 +62,17 @@ POSTGRES_URL = os.getenv("DATABASE_URL")
 # Reference video id used for 5-min ratio comparison
 REF_COMPARE_VIDEO_ID = "YxWlaYCA8MU"
 ADMIN_CREATE_SECRET = os.getenv("ADMIN_CREATE_SECRET", "")  # master password for creating users
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "").strip()
-GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "").strip()
-GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "").strip()
+
+def _first_env(*names):
+    for name in names:
+        value = os.getenv(name, "").strip()
+        if value:
+            return value
+    return ""
+
+GOOGLE_CLIENT_ID = _first_env("GOOGLE_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = _first_env("GOOGLE_CLIENT_SECRET", "GOOGLE_OAUTH_CLIENT_SECRET")
+GOOGLE_REDIRECT_URI = _first_env("GOOGLE_REDIRECT_URI", "GOOGLE_OAUTH_REDIRECT_URI")
 # MRBeast-specific client (separate API key)
 MRBEAST_API_KEY = os.getenv("MRBEAST_API_KEY", "")
 MRBEAST_CHANNEL_ID = os.getenv("MRBEAST_CHANNEL_ID", "UCX6OQ3DkcsbYNE6H8uQQuVA")
@@ -1920,7 +1928,7 @@ def google_callback():
     return _issue_login_session(conn, user["id"], next_url)
 
 
-@app.route("/login/google")
+# @app.route("/login/google")  # disabled duplicate route
 def login_google():
     if g.get("user"):
         return redirect(url_for("home"))
@@ -1945,7 +1953,7 @@ def login_google():
     return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + requests.compat.urlencode(params))
 
 
-@app.route("/auth/google/callback")
+# @app.route("/auth/google/callback")  # disabled duplicate route
 def google_callback():
     expected_state = session.get("oauth_state")
     got_state = request.args.get("state")
@@ -2120,7 +2128,7 @@ if "google_callback" not in app.view_functions:
     app.add_url_rule("/auth/google/callback", endpoint="google_callback", view_func=google_callback)
 
 
-@app.route("/login/google", endpoint="google_oauth_login")
+# @app.route("/login/google", endpoint="google_oauth_login")  # disabled duplicate route
 def login_google():
     if g.get("user"):
         return redirect(url_for("home"))
@@ -2145,7 +2153,7 @@ def login_google():
     return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + requests.compat.urlencode(params))
 
 
-@app.route("/auth/google/callback", endpoint="google_oauth_callback")
+# @app.route("/auth/google/callback", endpoint="google_oauth_callback")  # disabled duplicate route
 def google_callback():
     expected_state = session.get("oauth_state")
     got_state = request.args.get("state")
@@ -2217,7 +2225,7 @@ def google_callback():
     next_url = session.pop("oauth_next", url_for("home"))
     return _issue_login_session(conn, user["id"], next_url)
 
-@app.route("/login/google", endpoint="google_oauth_login")
+# @app.route("/login/google", endpoint="google_oauth_login")  # disabled duplicate route
 def google_oauth_login_view():
     if g.get("user"):
         return redirect(url_for("home"))
@@ -2242,7 +2250,7 @@ def google_oauth_login_view():
     return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + requests.compat.urlencode(params))
 
 
-@app.route("/auth/google/callback", endpoint="google_oauth_callback")
+# @app.route("/auth/google/callback", endpoint="google_oauth_callback")  # disabled duplicate route
 def google_oauth_callback_view():
     expected_state = session.get("oauth_state")
     got_state = request.args.get("state")
@@ -2314,9 +2322,7 @@ def google_oauth_callback_view():
     next_url = session.pop("oauth_next", url_for("home"))
     return _issue_login_session(conn, user["id"], next_url)
 
-app.view_functions.pop("login_google", None)
-app.view_functions.pop("google_callback", None)
-@app.route("/login/google", endpoint="google_oauth_login")
+# @app.route("/login/google", endpoint="google_oauth_login")  # disabled duplicate route
 def google_oauth_login_view():
     if g.get("user"):
         return redirect(url_for("home"))
@@ -2341,7 +2347,7 @@ def google_oauth_login_view():
     return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + requests.compat.urlencode(params))
 
 
-@app.route("/auth/google/callback", endpoint="google_oauth_callback")
+# @app.route("/auth/google/callback", endpoint="google_oauth_callback")  # disabled duplicate route
 def google_oauth_callback_view():
     expected_state = session.get("oauth_state")
     got_state = request.args.get("state")
@@ -2413,8 +2419,6 @@ def google_oauth_callback_view():
     next_url = session.pop("oauth_next", url_for("home"))
     return _issue_login_session(conn, user["id"], next_url)
 
-app.view_functions.pop("login_google", None)
-app.view_functions.pop("google_callback", None)
 def google_oauth_login_view():
     if g.get("user"):
         return redirect(url_for("home"))
@@ -2516,8 +2520,6 @@ if "google_oauth_login" not in app.view_functions:
 if "google_oauth_callback" not in app.view_functions:
     app.add_url_rule("/auth/google/callback", endpoint="google_oauth_callback", view_func=google_oauth_callback_view)
 
-app.view_functions.pop("login_google", None)
-app.view_functions.pop("google_callback", None)
 def google_oauth_login_view():
     if g.get("user"):
         return redirect(url_for("home"))
