@@ -25,7 +25,7 @@ from functools import wraps
 import pandas as pd
 from flask import (
     Flask, render_template, request, redirect, url_for,
-    flash, send_file, session, g, make_response, jsonify
+    flash, send_file, session, g, make_response, jsonify, send_from_directory, abort
 )
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -1926,6 +1926,78 @@ def _send_admin_approval_email(email, token, request_time):
     return False
 
 
+
+
+def _send_payment_review_email(user_email, transaction_id, screenshot_path, submitted_at):
+    if not ADMIN_APPROVAL_EMAIL:
+        log.warning("ADMIN_APPROVAL_EMAIL not configured. Payment review alert not sent for %s", user_email)
+        return False
+    if not RESEND_API_KEY:
+        log.warning("RESEND_API_KEY not configured. Payment review alert not sent for %s", user_email)
+        return False
+
+    subject = "New payment submission awaiting review"
+    admin_url = "https://videotracker.in/admin/users"
+    html_body = (
+        "<p>Hi Admin,</p>"
+        "<p>A user has submitted a payment proof that needs review.</p>"
+        "<p><strong>Details:</strong><br>"
+        f"Email: {user_email}<br>"
+        f"Transaction ID: {transaction_id}<br>"
+        f"Submitted At: {submitted_at}<br>"
+        f"Screenshot Path: {screenshot_path}</p>"
+        f"<p>Review here: <a href=\"{admin_url}\">{admin_url}</a></p>"
+        "<p>—<br>VideoTracker System</p>"
+    )
+    text_body = (
+        "Hi Admin,\n\n"
+        "A user has submitted a payment proof that needs review.\n\n"
+        "Details:\n"
+        f"- Email: {user_email}\n"
+        f"- Transaction ID: {transaction_id}\n"
+        f"- Submitted At: {submitted_at}\n"
+        f"- Screenshot Path: {screenshot_path}\n\n"
+        f"Review here: {admin_url}\n\n"
+        "—\nVideoTracker System\n"
+    )
+
+    try:
+        if resend is not None:
+            resend.api_key = RESEND_API_KEY
+            resend.Emails.send({
+                "from": RESEND_FROM,
+                "to": [ADMIN_APPROVAL_EMAIL],
+                "subject": subject,
+                "html": html_body,
+            })
+            return True
+
+        resp = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "from": RESEND_FROM,
+                "to": [ADMIN_APPROVAL_EMAIL],
+                "subject": subject,
+                "text": text_body,
+            },
+            timeout=20,
+        )
+        if 200 <= resp.status_code < 300:
+            return True
+        log.warning(
+            "Payment review email failed for %s: status=%s body=%s",
+            user_email,
+            resp.status_code,
+            (resp.text or "")[:300],
+        )
+    except Exception as e:
+        log.warning("Payment review email not sent for %s: %s", user_email, e)
+    return False
+
 def _send_user_welcome_email(email):
     user_name = _name_from_email(email)
     subject = "Your account has been approved"
@@ -3167,14 +3239,37 @@ def submit_payment():
     path = f"uploads/payment_proofs/{g.user['id']}_{uuid.uuid4().hex}.{ext}"
     file.save(path)
     conn = db()
+    submitted_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     with conn.cursor() as cur:
         cur.execute("INSERT INTO payment_requests (user_id, transaction_id, screenshot_path, status) VALUES (%s,%s,%s,'pending')", (g.user["id"], txid, path))
         cur.execute("UPDATE users SET payment_status='pending' WHERE id=%s", (g.user["id"],))
-    flash("Payment submitted. Status: Payment under review.", "info")
+    admin_notified = _send_payment_review_email(g.user.get("username", "unknown"), txid, path, submitted_at)
+    if admin_notified:
+        flash("Payment submitted. Status: Payment under review.", "info")
+    else:
+        flash("Payment submitted, but admin email notification failed. Please contact admin to ensure faster review.", "warning")
     return redirect(url_for("payment_page"))
 
 
+
+
+@app.get("/payment-proof/<path:proof_path>")
+@login_required
+def payment_proof(proof_path):
+    if not session.get("admin_ok"):
+        abort(403)
+
+    safe_base = os.path.abspath("uploads/payment_proofs")
+    absolute_path = os.path.abspath(os.path.join(safe_base, proof_path))
+    if not absolute_path.startswith(safe_base + os.sep):
+        abort(404)
+    if not os.path.exists(absolute_path):
+        abort(404)
+
+    return send_from_directory(safe_base, proof_path)
+
 @app.route("/admin/users", methods=["GET", "POST"])
+@login_required
 def admin_users():
     """
     Admin page:
@@ -3186,6 +3281,10 @@ def admin_users():
           * Force logout a user
     """
     conn = db()
+
+    if not g.get("user"):
+        flash("Please login to continue.", "danger")
+        return redirect(url_for("login"))
 
     if request.method == "POST":
         action = request.form.get("action") or ""
@@ -3326,6 +3425,7 @@ def admin_users():
             flash("Subscription expiry updated.", "success")
         elif action == "approve_payment":
             req_id = int(request.form.get("request_id") or "0")
+            reviewer_id = g.user.get("id")
             with conn.cursor() as cur:
                 cur.execute("SELECT user_id FROM payment_requests WHERE id=%s", (req_id,))
                 pr = cur.fetchone()
@@ -3335,16 +3435,17 @@ def admin_users():
                     base = u["subscription_expiry_date"] or datetime.now(timezone.utc)
                     new_exp = base + timedelta(days=30)
                     cur.execute("UPDATE users SET subscription_expiry_date=%s, grace_period_end=%s, payment_status='approved' WHERE id=%s", (new_exp, new_exp + timedelta(days=3), pr["user_id"]))
-                    cur.execute("UPDATE payment_requests SET status='approved', reviewed_at=NOW(), reviewed_by=%s WHERE id=%s", (g.user["id"], req_id))
+                    cur.execute("UPDATE payment_requests SET status='approved', reviewed_at=NOW(), reviewed_by=%s WHERE id=%s", (reviewer_id, req_id))
             flash("Payment approved and plan extended by 30 days.", "success")
         elif action == "reject_payment":
             req_id = int(request.form.get("request_id") or "0")
+            reviewer_id = g.user.get("id")
             with conn.cursor() as cur:
                 cur.execute("SELECT user_id FROM payment_requests WHERE id=%s", (req_id,))
                 pr = cur.fetchone()
                 if pr:
                     cur.execute("UPDATE users SET payment_status='rejected' WHERE id=%s", (pr["user_id"],))
-                    cur.execute("UPDATE payment_requests SET status='rejected', reviewed_at=NOW(), reviewed_by=%s, admin_note='Please resubmit payment details.' WHERE id=%s", (g.user["id"], req_id))
+                    cur.execute("UPDATE payment_requests SET status='rejected', reviewed_at=NOW(), reviewed_by=%s, admin_note='Please resubmit payment details.' WHERE id=%s", (reviewer_id, req_id))
             flash("Payment rejected. User asked to resubmit.", "warning")
 
         return redirect(url_for("admin_users"))
