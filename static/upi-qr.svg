@@ -1,0 +1,6 @@
+<svg xmlns='http://www.w3.org/2000/svg' width='900' height='900' viewBox='0 0 900 900'>
+  <rect width='900' height='900' fill='white'/>
+  <rect x='60' y='60' width='780' height='780' fill='none' stroke='black' stroke-width='8'/>
+  <text x='450' y='420' text-anchor='middle' font-size='44' font-family='Arial' fill='black'>Upload your UPI QR image</text>
+  <text x='450' y='480' text-anchor='middle' font-size='30' font-family='Arial' fill='#333'>Save it as static/upi-qr.svg</text>
+</svg>
