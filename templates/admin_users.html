@@ -73,6 +73,8 @@
               <th>Username</th>
               <th>Status</th>
               <th>Logged in?</th>
+              <th>Expiry</th>
+              <th>Payment</th>
               <th style="width: 320px;">Actions</th>
             </tr>
           </thead>
@@ -83,6 +85,8 @@
                 <td>{{ u.username }}</td>
                 <td>{% if u.is_active %}<span class="badge bg-success">Active</span>{% else %}<span class="badge bg-secondary">Inactive</span>{% endif %}</td>
                 <td>{% if u.is_logged_in %}<span class="badge bg-info text-dark">Yes</span>{% else %}<span class="badge bg-light text-muted">No</span>{% endif %}</td>
+                <td>{{ u.subscription_expiry_date or '-' }}</td>
+                <td>{{ u.payment_status or '-' }}</td>
                 <td>
                   <div class="d-flex flex-wrap gap-1">
                     <form method="POST" action="{{ url_for('admin_users') }}">
@@ -113,6 +117,12 @@
                       <input type="hidden" name="user_id" value="{{ u.id }}">
                       <button class="btn btn-sm btn-danger" type="submit">Delete User</button>
                     </form>
+                    <form method="POST" action="{{ url_for('admin_users') }}">
+                      <input type="hidden" name="action" value="set_expiry">
+                      <input type="hidden" name="user_id" value="{{ u.id }}">
+                      <input type="date" name="expiry_date" required>
+                      <button class="btn btn-sm btn-outline-warning" type="submit">Set Expiry</button>
+                    </form>
                   </div>
                 </td>
               </tr>
@@ -120,6 +130,24 @@
           </tbody>
         </table>
       </div>
+    {% endif %}
+  </div>
+
+  <div class="frost p-3 mt-3">
+    <h5>Pending payment requests</h5>
+    {% if payment_requests|length == 0 %}
+      <p class="muted small mb-0">No pending requests.</p>
+    {% else %}
+      {% for pr in payment_requests %}
+      <div class="border rounded p-2 mb-2">
+        <div><strong>{{ pr.username }}</strong> | Txn: {{ pr.transaction_id }} | {{ pr.submitted_at }}</div>
+        <div><a href="/{{ pr.screenshot_path }}" target="_blank">View screenshot</a></div>
+        <div class="d-flex gap-2 mt-2">
+          <form method="POST"><input type="hidden" name="action" value="approve_payment"><input type="hidden" name="request_id" value="{{ pr.id }}"><button class="btn btn-sm btn-success">Approve</button></form>
+          <form method="POST"><input type="hidden" name="action" value="reject_payment"><input type="hidden" name="request_id" value="{{ pr.id }}"><button class="btn btn-sm btn-danger">Reject</button></form>
+        </div>
+      </div>
+      {% endfor %}
     {% endif %}
   </div>
 

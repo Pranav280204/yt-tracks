@@ -11,6 +11,7 @@ except Exception:
     resend = None
 import hashlib
 import json
+import uuid
 import math
 import secrets
 import bisect
@@ -401,6 +402,35 @@ def init_db():
         ALTER TABLE users
         ADD COLUMN IF NOT EXISTS device_info TEXT;
         """)
+        cur.execute("""
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS subscription_expiry_date TIMESTAMPTZ;
+        """)
+        cur.execute("""
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS grace_period_end TIMESTAMPTZ;
+        """)
+        cur.execute("""
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS payment_status TEXT NOT NULL DEFAULT 'approved';
+        """)
+        cur.execute("""
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS last_reminder_sent TEXT;
+        """)
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS payment_requests (
+          id SERIAL PRIMARY KEY,
+          user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          transaction_id TEXT NOT NULL,
+          screenshot_path TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          submitted_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          reviewed_at TIMESTAMPTZ,
+          reviewed_by INT REFERENCES users(id) ON DELETE SET NULL,
+          admin_note TEXT
+        );
+        """)
 
         # Videos ----------------------------------
         cur.execute("""
@@ -544,7 +574,7 @@ def get_current_user():
     conn = db()
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, username, current_session_token, is_active "
+            "SELECT id, username, current_session_token, is_active, subscription_expiry_date, grace_period_end, payment_status, last_reminder_sent "
             "FROM users WHERE id=%s",
             (uid,)
         )
@@ -567,11 +597,32 @@ def get_current_user():
 def load_user():
     # runs every request; store user in g
     g.user = get_current_user()
+    g.subscription = None
+    if not g.user:
+        return
+    now = datetime.now(timezone.utc)
+    expiry = g.user.get("subscription_expiry_date")
+    grace_end = g.user.get("grace_period_end")
+    if not expiry:
+        expiry = now + timedelta(days=30)
+        grace_end = expiry + timedelta(days=3)
+        with db().cursor() as cur:
+            cur.execute("UPDATE users SET subscription_expiry_date=%s, grace_period_end=%s WHERE id=%s", (expiry, grace_end, g.user["id"]))
+        g.user["subscription_expiry_date"] = expiry
+        g.user["grace_period_end"] = grace_end
+    days_left = (expiry.date() - now.date()).days
+    in_grace = now > expiry and now <= grace_end
+    expired_blocked = now > grace_end
+    g.subscription = {"expiry": expiry, "grace_end": grace_end, "days_left": days_left, "in_grace": in_grace, "expired_blocked": expired_blocked}
+
+    if request.endpoint and request.endpoint not in {"login", "logout", "static", "payment_page", "submit_payment", "google_oauth_login", "google_oauth_callback", "approve_google_user", "admin_users"}:
+        if expired_blocked or g.user.get("payment_status") == "pending":
+            return redirect(url_for("payment_page"))
 
 @app.context_processor
 def inject_user():
     # make current_user available in templates
-    return {"current_user": getattr(g, "user", None)}
+    return {"current_user": getattr(g, "user", None), "subscription_info": getattr(g, "subscription", None)}
 
 def login_required(f):
     @wraps(f)
@@ -1787,14 +1838,49 @@ def login():
     return render_template("login.html", google_enabled=google_enabled)
 
 
-def _send_admin_approval_email(email, token):
+def _name_from_email(email):
+    local = (email or "").split("@")[0].strip()
+    if not local:
+        return "User"
+    return local.replace(".", " ").replace("_", " ").title()
+
+
+def _send_admin_approval_email(email, token, request_time):
     approve_url = url_for("approve_google_user", token=token, _external=True)
     if not ADMIN_APPROVAL_EMAIL:
         log.warning("ADMIN_APPROVAL_EMAIL not configured. Manual approval for %s: %s", email, approve_url)
         return False
 
-    subject = "Approve new Google user"
-    body = f"Approve Google login for {email}: {approve_url}"
+    user_name = _name_from_email(email)
+    subject = "New VideoTracker access request awaiting approval"
+    body = (
+        "Hi Admin,\n\n"
+        "A new user has requested access to VideoTracker and is awaiting approval.\n\n"
+        "User Details:\n"
+        f"- Name: {user_name}\n"
+        f"- Email: {email}\n"
+        f"- Request Time: {request_time}\n\n"
+        "Action Required:\n"
+        "Review and approve or reject this request using the link below:\n\n"
+        f"{approve_url}\n\n"
+        "If the link doesn’t work, you can manually copy and paste it into your browser.\n\n"
+        "Please take action at your earliest convenience.\n\n"
+        "—\nVideoTracker System\nhttps://videotracker.in\n"
+    )
+    html_body = (
+        "<p>Hi Admin,</p>"
+        "<p>A new user has requested access to VideoTracker and is awaiting approval.</p>"
+        "<p><strong>User Details:</strong><br>"
+        f"Name: {user_name}<br>"
+        f"Email: {email}<br>"
+        f"Request Time: {request_time}</p>"
+        "<p><strong>Action Required:</strong><br>"
+        "Review and approve or reject this request using the link below:</p>"
+        f"<p>👉 <a href=\"{approve_url}\">{approve_url}</a></p>"
+        "<p>If the link doesn’t work, you can manually copy and paste it into your browser.</p>"
+        "<p>Please take action at your earliest convenience.</p>"
+        "<p>—<br>VideoTracker System<br><a href=\"https://videotracker.in\">https://videotracker.in</a></p>"
+    )
 
     if RESEND_API_KEY:
         try:
@@ -1804,7 +1890,7 @@ def _send_admin_approval_email(email, token):
                     "from": RESEND_FROM,
                     "to": [ADMIN_APPROVAL_EMAIL],
                     "subject": subject,
-                    "html": f"<p>Approve Google login for <strong>{email}</strong>: <a href=\"{approve_url}\">Approve user</a></p>",
+                    "html": html_body,
                 })
                 return True
 
@@ -1838,8 +1924,85 @@ def _send_admin_approval_email(email, token):
 
     log.warning("RESEND_API_KEY not configured. Manual approval for %s: %s", email, approve_url)
     return False
+
+
+def _send_user_welcome_email(email):
+    user_name = _name_from_email(email)
+    subject = "Your account has been approved"
+    login_url = "https://videotracker.in/login"
+    html_body = (
+        f"<p>Hi {user_name},</p>"
+        "<p>Good news — your account has been approved and you now have full access to VideoTracker 🚀</p>"
+        "<p>You can log in and start tracking your YouTube videos here:<br>"
+        f"👉 <a href=\"{login_url}\">{login_url}</a></p>"
+        "<p><strong>What you can do now:</strong><br>"
+        "• Track real-time video views<br>"
+        "• Monitor performance over time<br>"
+        "• Manage your tracked videos easily</p>"
+        "<p>If you run into any issues or have questions, feel free to reach out.</p>"
+        "<p>Welcome aboard,<br>VideoTracker Team<br>"
+        "<a href=\"https://videotracker.in\">https://videotracker.in</a></p>"
+    )
+    text_body = (
+        f"Hi {user_name},\n\n"
+        "Good news — your account has been approved and you now have full access to VideoTracker 🚀\n\n"
+        "You can log in and start tracking your YouTube videos here:\n"
+        "👉 https://videotracker.in/login\n\n"
+        "What you can do now:\n"
+        "• Track real-time video views\n"
+        "• Monitor performance over time\n"
+        "• Manage your tracked videos easily\n\n"
+        "If you run into any issues or have questions, feel free to reach out.\n\n"
+        "Welcome aboard,\n"
+        "VideoTracker Team\n"
+        "https://videotracker.in\n"
+    )
+
+    if not RESEND_API_KEY:
+        log.warning("RESEND_API_KEY not configured. Welcome email not sent to %s", email)
+        return False
+
+    try:
+        if resend is not None:
+            resend.api_key = RESEND_API_KEY
+            resend.Emails.send({
+                "from": RESEND_FROM,
+                "to": [email],
+                "subject": subject,
+                "html": html_body,
+            })
+            return True
+
+        resp = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {RESEND_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "from": RESEND_FROM,
+                "to": [email],
+                "subject": subject,
+                "text": text_body,
+            },
+            timeout=20,
+        )
+        if 200 <= resp.status_code < 300:
+            return True
+        log.warning(
+            "Welcome email failed for %s: status=%s body=%s",
+            email,
+            resp.status_code,
+            (resp.text or "")[:300],
+        )
+    except Exception as e:
+        log.warning("Welcome email not sent for %s: %s", email, e)
+    return False
+
+
 def _handle_unknown_google_user(conn, email):
     token = secrets.token_urlsafe(32)
+    request_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     with conn.cursor() as cur:
         cur.execute("""
             INSERT INTO pending_google_approvals (email, token, requested_at, approved)
@@ -1847,7 +2010,7 @@ def _handle_unknown_google_user(conn, email):
             ON CONFLICT (email)
             DO UPDATE SET token=EXCLUDED.token, requested_at=NOW(), approved=FALSE, approved_at=NULL
         """, (email, token))
-    _send_admin_approval_email(email, token)
+    _send_admin_approval_email(email, token, request_time)
     flash("Your Google account needs admin approval. We emailed the admin for confirmation.", "warning")
     return redirect(url_for("login"))
 
@@ -1867,6 +2030,7 @@ def approve_google_user(token):
         else:
             cur.execute("INSERT INTO users (username, password_hash, is_active) VALUES (%s, %s, TRUE)", (email, generate_password_hash(secrets.token_urlsafe(24))))
         cur.execute("UPDATE pending_google_approvals SET approved=TRUE, approved_at=NOW() WHERE email=%s", (email,))
+    _send_user_welcome_email(email)
     return "Approved. User can now login with Google.", 200
 
 @app.route("/login/google")
@@ -2974,6 +3138,41 @@ def logout():
     flash("Logged out.", "info")
     return redirect(url_for("login"))
 
+def _allowed_payment_file(filename: str) -> bool:
+    ext = (filename.rsplit(".", 1)[-1].lower() if "." in filename else "")
+    return ext in {"png", "jpg", "jpeg", "webp", "pdf"}
+
+@app.get("/payment")
+@login_required
+def payment_page():
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("SELECT id, status, transaction_id, submitted_at FROM payment_requests WHERE user_id=%s ORDER BY submitted_at DESC LIMIT 1", (g.user["id"],))
+        latest = cur.fetchone()
+    return render_template("payment.html", latest=latest, price_inr=900)
+
+@app.post("/payment/submit")
+@login_required
+def submit_payment():
+    txid = (request.form.get("transaction_id") or "").strip()
+    file = request.files.get("payment_screenshot")
+    if not txid or not file or not file.filename:
+        flash("Transaction ID and screenshot are required.", "warning")
+        return redirect(url_for("payment_page"))
+    if not _allowed_payment_file(file.filename):
+        flash("Only png, jpg, jpeg, webp, or pdf files are allowed.", "danger")
+        return redirect(url_for("payment_page"))
+    os.makedirs("uploads/payment_proofs", exist_ok=True)
+    ext = file.filename.rsplit(".", 1)[-1].lower()
+    path = f"uploads/payment_proofs/{g.user['id']}_{uuid.uuid4().hex}.{ext}"
+    file.save(path)
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("INSERT INTO payment_requests (user_id, transaction_id, screenshot_path, status) VALUES (%s,%s,%s,'pending')", (g.user["id"], txid, path))
+        cur.execute("UPDATE users SET payment_status='pending' WHERE id=%s", (g.user["id"],))
+    flash("Payment submitted. Status: Payment under review.", "info")
+    return redirect(url_for("payment_page"))
+
 
 @app.route("/admin/users", methods=["GET", "POST"])
 def admin_users():
@@ -3119,6 +3318,34 @@ def admin_users():
             except Exception as e:
                 log.exception("Delete user failed: %s", e)
                 flash("Could not delete user.", "danger")
+        elif action == "set_expiry":
+            user_id = int(request.form.get("user_id") or "0")
+            expiry = datetime.fromisoformat((request.form.get("expiry_date") or "").strip()).replace(tzinfo=timezone.utc)
+            with conn.cursor() as cur:
+                cur.execute("UPDATE users SET subscription_expiry_date=%s, grace_period_end=%s WHERE id=%s", (expiry, expiry + timedelta(days=3), user_id))
+            flash("Subscription expiry updated.", "success")
+        elif action == "approve_payment":
+            req_id = int(request.form.get("request_id") or "0")
+            with conn.cursor() as cur:
+                cur.execute("SELECT user_id FROM payment_requests WHERE id=%s", (req_id,))
+                pr = cur.fetchone()
+                if pr:
+                    cur.execute("SELECT subscription_expiry_date FROM users WHERE id=%s", (pr["user_id"],))
+                    u = cur.fetchone()
+                    base = u["subscription_expiry_date"] or datetime.now(timezone.utc)
+                    new_exp = base + timedelta(days=30)
+                    cur.execute("UPDATE users SET subscription_expiry_date=%s, grace_period_end=%s, payment_status='approved' WHERE id=%s", (new_exp, new_exp + timedelta(days=3), pr["user_id"]))
+                    cur.execute("UPDATE payment_requests SET status='approved', reviewed_at=NOW(), reviewed_by=%s WHERE id=%s", (g.user["id"], req_id))
+            flash("Payment approved and plan extended by 30 days.", "success")
+        elif action == "reject_payment":
+            req_id = int(request.form.get("request_id") or "0")
+            with conn.cursor() as cur:
+                cur.execute("SELECT user_id FROM payment_requests WHERE id=%s", (req_id,))
+                pr = cur.fetchone()
+                if pr:
+                    cur.execute("UPDATE users SET payment_status='rejected' WHERE id=%s", (pr["user_id"],))
+                    cur.execute("UPDATE payment_requests SET status='rejected', reviewed_at=NOW(), reviewed_by=%s, admin_note='Please resubmit payment details.' WHERE id=%s", (g.user["id"], req_id))
+            flash("Payment rejected. User asked to resubmit.", "warning")
 
         return redirect(url_for("admin_users"))
 
@@ -3135,13 +3362,19 @@ def admin_users():
               id,
               username,
               is_active,
-              (current_session_token IS NOT NULL) AS is_logged_in
+              (current_session_token IS NOT NULL) AS is_logged_in,
+              subscription_expiry_date,
+              payment_status
             FROM users
             ORDER BY username
         """)
         users = cur.fetchall()
+        cur.execute("""SELECT pr.id, pr.user_id, u.username, pr.transaction_id, pr.screenshot_path, pr.status, pr.submitted_at
+                       FROM payment_requests pr JOIN users u ON u.id=pr.user_id
+                       WHERE pr.status='pending' ORDER BY pr.submitted_at ASC""")
+        payment_requests = cur.fetchall()
 
-    return render_template("admin_users.html", users=users)
+    return render_template("admin_users.html", users=users, payment_requests=payment_requests)
 
 
 
