@@ -1848,10 +1848,15 @@ def login():
 
 
 def _send_admin_approval_email(email, token):
-    if not (SMTP_HOST and SMTP_FROM and ADMIN_APPROVAL_EMAIL):
-        log.warning("SMTP/admin approval email not configured; cannot send approval email for %s", email)
-        return False
     approve_url = url_for("approve_google_user", token=token, _external=True)
+    if not (SMTP_HOST and SMTP_FROM and ADMIN_APPROVAL_EMAIL):
+        log.warning(
+            "SMTP/admin approval email not configured. Approve manually for %s: %s",
+            email,
+            approve_url,
+        )
+        return False
+
     body = f"Approve Google login for {email}: {approve_url}"
     msg = f"Subject: Approve new Google user\nFrom: {SMTP_FROM}\nTo: {ADMIN_APPROVAL_EMAIL}\n\n{body}"
     try:
@@ -1863,8 +1868,21 @@ def _send_admin_approval_email(email, token):
                 s.login(SMTP_USER, SMTP_PASS)
             s.sendmail(SMTP_FROM, [ADMIN_APPROVAL_EMAIL], msg)
         return True
+    except OSError as e:
+        log.warning(
+            "Approval email not sent (network/SMTP unreachable) for %s: %s. Manual approval link: %s",
+            email,
+            e,
+            approve_url,
+        )
+        return False
     except Exception as e:
-        log.exception("Failed to send approval email: %s", e)
+        log.warning(
+            "Approval email not sent for %s: %s. Manual approval link: %s",
+            email,
+            e,
+            approve_url,
+        )
         return False
 
 def _handle_unknown_google_user(conn, email):
