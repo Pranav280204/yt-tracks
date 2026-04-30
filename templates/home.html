@@ -133,6 +133,16 @@
 </head>
 <body>
 <div class="shell">
+  {% if subscription_info and (subscription_info.days_left <= 1 or subscription_info.in_grace) %}
+    <div class="alert {{ 'alert-warning' if subscription_info.in_grace else 'alert-info' }} mb-3" role="alert">
+      {% if subscription_info.in_grace %}
+        Your plan has expired. Renew the plan within 3 days.
+      {% else %}
+        Your plan expires in <strong>{{ subscription_info.days_left }}</strong> day(s).
+      {% endif %}
+      <a href="{{ url_for('payment_page') }}" class="alert-link">Renew now</a>.
+    </div>
+  {% endif %}
   <header class="frost p-3 p-md-4 mb-3">
     <div class="d-flex align-items-center justify-content-between flex-wrap gap-3">
       <div>
