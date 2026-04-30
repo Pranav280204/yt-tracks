@@ -1920,7 +1920,7 @@ def google_callback():
     return _issue_login_session(conn, user["id"], next_url)
 
 
-@app.route("/login/google")
+# @app.route("/login/google")  # disabled duplicate route
 def login_google():
     if g.get("user"):
         return redirect(url_for("home"))
@@ -1945,7 +1945,7 @@ def login_google():
     return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + requests.compat.urlencode(params))
 
 
-@app.route("/auth/google/callback")
+# @app.route("/auth/google/callback")  # disabled duplicate route
 def google_callback():
     expected_state = session.get("oauth_state")
     got_state = request.args.get("state")
@@ -2120,7 +2120,7 @@ if "google_callback" not in app.view_functions:
     app.add_url_rule("/auth/google/callback", endpoint="google_callback", view_func=google_callback)
 
 
-@app.route("/login/google", endpoint="google_oauth_login")
+# @app.route("/login/google", endpoint="google_oauth_login")  # disabled duplicate route
 def login_google():
     if g.get("user"):
         return redirect(url_for("home"))
@@ -2145,7 +2145,7 @@ def login_google():
     return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + requests.compat.urlencode(params))
 
 
-@app.route("/auth/google/callback", endpoint="google_oauth_callback")
+# @app.route("/auth/google/callback", endpoint="google_oauth_callback")  # disabled duplicate route
 def google_callback():
     expected_state = session.get("oauth_state")
     got_state = request.args.get("state")
@@ -2217,7 +2217,7 @@ def google_callback():
     next_url = session.pop("oauth_next", url_for("home"))
     return _issue_login_session(conn, user["id"], next_url)
 
-@app.route("/login/google", endpoint="google_oauth_login")
+# @app.route("/login/google", endpoint="google_oauth_login")  # disabled duplicate route
 def google_oauth_login_view():
     if g.get("user"):
         return redirect(url_for("home"))
@@ -2242,7 +2242,7 @@ def google_oauth_login_view():
     return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + requests.compat.urlencode(params))
 
 
-@app.route("/auth/google/callback", endpoint="google_oauth_callback")
+# @app.route("/auth/google/callback", endpoint="google_oauth_callback")  # disabled duplicate route
 def google_oauth_callback_view():
     expected_state = session.get("oauth_state")
     got_state = request.args.get("state")
@@ -2316,7 +2316,7 @@ def google_oauth_callback_view():
 
 app.view_functions.pop("login_google", None)
 app.view_functions.pop("google_callback", None)
-@app.route("/login/google", endpoint="google_oauth_login")
+# @app.route("/login/google", endpoint="google_oauth_login")  # disabled duplicate route
 def google_oauth_login_view():
     if g.get("user"):
         return redirect(url_for("home"))
@@ -2341,7 +2341,7 @@ def google_oauth_login_view():
     return redirect("https://accounts.google.com/o/oauth2/v2/auth?" + requests.compat.urlencode(params))
 
 
-@app.route("/auth/google/callback", endpoint="google_oauth_callback")
+# @app.route("/auth/google/callback", endpoint="google_oauth_callback")  # disabled duplicate route
 def google_oauth_callback_view():
     expected_state = session.get("oauth_state")
     got_state = request.args.get("state")
