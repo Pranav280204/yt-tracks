@@ -50,10 +50,8 @@
     </div>
     <button class="btn btn-warning w-100" type="submit">Login</button>
   </form>
-  {% if google_enabled %}
-    <div class="my-3 text-center text-secondary">or</div>
-    <a class="btn btn-light w-100" href="{{ url_for('login_google', next=request.args.get('next')) }}">Continue with Google</a>
-  {% endif %}
+  <div class="my-3 text-center text-secondary">or</div>
+  <a class="btn btn-light w-100" href="{{ url_for('login_google', next=request.args.get('next')) }}">Continue with Google</a>
 
   <div class="mt-3 d-grid">
     <a class="btn btn-outline-light btn-sm" href="{{ url_for('admin_users') }}">Admin: Add / Manage Users</a>
