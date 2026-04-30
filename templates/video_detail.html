@@ -489,6 +489,7 @@
     const liveBadge = document.getElementById('liveBadge');
 
     const videoId = "{{ v.video_id }}";
+    const isDeleted = {{ "true" if v.is_deleted else "false" }};
     let lastKnownIso = liveBadge ? (liveBadge.dataset.latestIso || null) : null;
     let lastKnownViews = Number(liveBadge ? (liveBadge.dataset.views || ({{ v.latest_views or 0 }})) : ({{ v.latest_views or 0 }}));
     let controller = null;
@@ -570,7 +571,7 @@
     }
 
     async function pollLiveCounter() {
-      if (!liveCounterEl) return;
+      if (!liveCounterEl || isDeleted) return;
       try {
         const res = await fetch(`/video/${encodeURIComponent(videoId)}/live_views`, {
           credentials: 'same-origin',
@@ -656,10 +657,10 @@
     const pollInterval = setInterval(() => {
       if (document.visibilityState === 'visible') poll();
     }, POLL_MS);
-    const livePollInterval = setInterval(() => {
+    const livePollInterval = isDeleted ? null : setInterval(() => {
       if (document.visibilityState === 'visible') pollLiveCounter();
     }, LIVE_POLL_MS);
-    pollLiveCounter();
+    if (!isDeleted) pollLiveCounter();
 
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') {
