@@ -290,6 +290,41 @@
         </div>
       </div>
 
+
+      <div class="card p-3 mt-3">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+          <strong>Closest Historical Match</strong>
+          <a class="btn btn-sm btn-outline-warning" href="{{ url_for('video_velocity_vault', video_id=v.video_id) }}">Open Vault</a>
+        </div>
+        {% if v.day1_match %}
+          <div class="small-note mb-2">
+            Match video: <span class="mono">{{ v.day1_match.matched_video_id }}</span>
+            <span class="ms-2">Overlap: {{ v.day1_match.overlap_hours }}h</span>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle mb-0">
+              <thead>
+                <tr>
+                  <th>Hour</th>
+                  <th>Current Growth</th>
+                  <th>Match Growth</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in v.day1_match.hourly_comparison[:5] %}
+                <tr>
+                  <td>{{ row.current.label }}</td>
+                  <td>{% if row.current.growth is not none %}{{ "{:,}".format(row.current.growth) }}{% else %}—{% endif %}</td>
+                  <td>{% if row.matched.growth is not none %}{{ "{:,}".format(row.matched.growth) }}{% else %}—{% endif %}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <div class="small-note mb-0">No eligible historical match found yet.</div>
+        {% endif %}
+      </div>
       <!-- Targets compact card (removed "Manage" link as requested) -->
       <div class="card p-3">
         <div class="d-flex justify-content-between align-items-center mb-2">

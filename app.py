@@ -3887,12 +3887,43 @@ def video_detail(video_id):
     return render_template("video_detail.html", v=info)
 
 
+
+
+@app.get("/video/<video_id>/velocity-vault-intro")
+@login_required
+def velocity_vault_intro(video_id):
+    """One-time intro page for the closest historical match feature."""
+    info = build_video_display(video_id)
+    if info is None:
+        flash("Video not found.", "warning")
+        return redirect(url_for("home"))
+
+    info["thumbnail"] = info.get("thumbnail_url") or f"https://i.ytimg.com/vi/{video_id}/hqdefault.jpg"
+    return render_template("velocity_vault_intro.html", v=info)
+
+
+@app.post("/video/<video_id>/velocity-vault-intro/ack")
+@login_required
+def velocity_vault_intro_ack(video_id):
+    response = make_response(redirect(url_for("video_velocity_vault", video_id=video_id)))
+    response.set_cookie(
+        f"vault_intro_seen_{video_id}",
+        "1",
+        max_age=60 * 60 * 24 * 365,
+        httponly=True,
+        samesite="Lax"
+    )
+    return response
+
 @app.get("/video/<video_id>/velocity-vault")
 @login_required
 def video_velocity_vault(video_id):
     """
     Dedicated page for Day-1 closest historical comparison aligned by time since upload.
     """
+    if request.cookies.get(f"vault_intro_seen_{video_id}") != "1":
+        return redirect(url_for("velocity_vault_intro", video_id=video_id))
+
     info = build_video_display(video_id)
     if info is None:
         flash("Video not found.", "warning")
