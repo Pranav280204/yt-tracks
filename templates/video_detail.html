@@ -380,39 +380,6 @@
       <div class="small-note muted">Manually fetch the latest rows from the database.</div>
     </div>
 
-    {% if v.day1_match %}
-    <div class="card p-3 mb-3">
-      <h6 class="mb-2">Day 1 Closest Historical Match</h6>
-      <div class="small-note mb-2">
-        Matched video: <span class="mono">{{ v.day1_match.matched_video_id }}</span> •
-        Current timestamp is aligned by exact time since upload (±5 seconds).
-      </div>
-      <div class="table-responsive">
-        <table class="table table-sm mb-0">
-          <thead>
-            <tr>
-              <th>Hour</th>
-              <th>Current Views</th>
-              <th>Current Growth</th>
-              <th>Matched Views</th>
-              <th>Matched Growth</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for row in v.day1_match.hourly_comparison %}
-              <tr>
-                <td>{{ row.hour }}</td>
-                <td>{% if row.current.views is not none %}{{ "{:,}".format(row.current.views) }}{% else %}—{% endif %}</td>
-                <td>{% if row.current.growth is not none %}{{ "{:,}".format(row.current.growth) }}{% else %}—{% endif %}</td>
-                <td>{% if row.matched.views is not none %}{{ "{:,}".format(row.matched.views) }}{% else %}—{% endif %}</td>
-                <td>{% if row.matched.growth is not none %}{{ "{:,}".format(row.matched.growth) }}{% else %}—{% endif %}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
-    </div>
-    {% endif %}
 
     <!-- Date selector row -->
     <div class="mt-3 date-row align-items-center">
