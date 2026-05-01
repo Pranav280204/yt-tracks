@@ -780,10 +780,12 @@ _VIDEO_DISPLAY_CACHE_TTL = 5  # seconds; tune this
 # maximum number of days of samples to fetch for display (reduce to speed up)
 _MAX_DISPLAY_DAYS = 14
 def invalidate_video_cache(video_id: str):
-    """Remove a cached build_video_display result for a video_id (no-op if missing)."""
+    """Remove cached build_video_display results for a video_id (no-op if missing)."""
     try:
         with _video_display_cache_lock:
-            _video_display_cache.pop(video_id, None)
+            keys = [k for k in _video_display_cache.keys() if k.startswith(f"{video_id}|")]
+            for k in keys:
+                _video_display_cache.pop(k, None)
     except Exception:
         # be resilient to concurrency issues
         log.exception("invalidate_video_cache error for %s", video_id)
@@ -1706,7 +1708,7 @@ def start_background():
 # -----------------------------
 # Helper: build display data for one video
 # -----------------------------
-def build_video_display(vid: str, exclude_weekends: bool = False):
+def build_video_display(vid: str, exclude_weekends: bool = False, include_day1_match: bool = False):
     """
     Build display data for a video:
      - fetches only recent rows (bounded window)
@@ -1720,8 +1722,9 @@ def build_video_display(vid: str, exclude_weekends: bool = False):
     nowu = now_utc()
 
     # try short in-memory cache
+    cache_key = f"{vid}|ew={1 if exclude_weekends else 0}|d1={1 if include_day1_match else 0}"
     with _video_display_cache_lock:
-        ent = _video_display_cache.get(vid)
+        ent = _video_display_cache.get(cache_key)
         if ent:
             cached_obj, fetched_at = ent
             if time.time() - fetched_at <= _VIDEO_DISPLAY_CACHE_TTL:
@@ -1952,6 +1955,15 @@ def build_video_display(vid: str, exclude_weekends: bool = False):
 
     compare_meta = None
 
+    day1_match = None
+    if include_day1_match:
+        day1_match = find_closest_day1_video_match(
+            vid,
+            latest_ts,
+            latest_views,
+            exclude_weekends=exclude_weekends
+        )
+
     result = {
         "video_id": vrow["video_id"],
         "name": vrow["name"],
@@ -1974,7 +1986,7 @@ def build_video_display(vid: str, exclude_weekends: bool = False):
 
     # cache it
     with _video_display_cache_lock:
-        _video_display_cache[vid] = (result, time.time())
+        _video_display_cache[cache_key] = (result, time.time())
 
     return result
 
@@ -4108,7 +4120,7 @@ def video_velocity_vault(video_id):
     if request.cookies.get(f"vault_intro_seen_{video_id}") != "1":
         return redirect(url_for("velocity_vault_intro", video_id=video_id, exclude_weekends="1" if exclude_weekends else None))
 
-    info = build_video_display(video_id, exclude_weekends=exclude_weekends)
+    info = build_video_display(video_id, exclude_weekends=exclude_weekends, include_day1_match=True)
     if info is None:
         flash("Video not found.", "warning")
         return redirect(url_for("home"))
