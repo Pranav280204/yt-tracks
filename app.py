@@ -1996,7 +1996,7 @@ def build_video_display(vid: str, exclude_weekends: bool = False, include_day1_m
         "thumbnail_prev_url": vrow.get("thumbnail_prev_url"),
         "thumbnail_changed": bool(vrow.get("thumbnail_changed")),
         "thumbnail_changed_at": vrow.get("thumbnail_changed_at"),
-        "day1_match": None,
+        "day1_match": day1_match,
         "exclude_weekends": bool(exclude_weekends),
     }
 
@@ -2137,7 +2137,10 @@ def find_closest_day1_video_match(
             score += abs(c["views"] - m["views"])
             score += abs(c["growth"] - m["growth"]) * 2
             score += int((c["gap"] + m["gap"]) * 0.1)
-        if overlap < 6:
+        # Allow early-day matching once at least 3 hourly windows overlap.
+        # Previously this required 6 windows, which made fresh videos show
+        # "No eligible historical match" for too long.
+        if overlap < 3:
             continue
         score = int(score / overlap)
         if best is None or score < best["score"]:
