@@ -2146,26 +2146,20 @@ def find_closest_day1_video_match(
     if len(current_points) < 2:
         return None
 
-    # Dynamically cap overlap by whichever timeline has the least coverage.
-    # This avoids forcing fixed Day-1 style windows when either video is newer
-    # or has sparse data.
-    current_max_hour = max(0, int(current_since_upload // 3600))
-    if current_max_hour < 2:
-        return None
-
-    current_hourly = hourly_points(current_points, current_max_hour)
+    # Dynamically cap overlap by each series' observed coverage.
+    # We use sampled timelines (not wall-clock since upload) so overlap reflects
+    # what data actually exists for current and matched videos.
+    current_data_max_hour = min(24, max(0, int(current_points[-1][0] // 3600))) if current_points else 0
 
     best = None
     for hid in historical_ids:
         hist_points = series.get(hid, [])
-        if len(hist_points) < 2:
+        hist_hourly = hourly_points(hist_points)
+        if not hist_hourly or not hist_points:
             continue
 
-        hist_max_hour = max(0, int(hist_points[-1][0] // 3600))
-        hist_hourly = hourly_points(hist_points, hist_max_hour)
-        if not hist_hourly:
-            continue
-        pair_max_hour = min(current_max_hour, hist_max_hour)
+        hist_max_hour = min(24, max(0, int(hist_points[-1][0] // 3600)))
+        pair_max_hour = min(current_data_max_hour, hist_max_hour)
         if pair_max_hour < 2:
             continue
 
