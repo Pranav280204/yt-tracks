@@ -546,6 +546,23 @@ def init_db():
           note         TEXT
         );
         """)
+        cur.execute("""
+        CREATE TABLE IF NOT EXISTS auto_track_jobs (
+          id SERIAL PRIMARY KEY,
+          channel_id TEXT NOT NULL,
+          channel_input TEXT NOT NULL,
+          run_time_utc TIMESTAMPTZ NOT NULL,
+          processed_at TIMESTAMPTZ,
+          added_video_id TEXT,
+          status TEXT NOT NULL DEFAULT 'scheduled',
+          created_by INT REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """)
+        cur.execute("""
+        CREATE INDEX IF NOT EXISTS idx_auto_track_jobs_pending
+        ON auto_track_jobs (status, run_time_utc);
+        """)
 
         # Channel snapshots ----------------------------------
         cur.execute("""
@@ -680,6 +697,72 @@ def fetch_title(video_id: str) -> str:
     except Exception as e:
         log.exception("Title fetch error: %s", e)
         return "Unknown"
+
+def _extract_channel_id_or_handle(raw: str) -> tuple[Optional[str], Optional[str]]:
+    """Return (channel_id, handle) parsed from a channel id or URL input."""
+    s = (raw or "").strip()
+    if not s:
+        return None, None
+    if s.startswith("UC") and len(s) >= 20:
+        return s, None
+    try:
+        u = urlparse(s)
+    except Exception:
+        u = None
+    if not u or not u.netloc:
+        if s.startswith("@"):
+            return None, s[1:]
+        return None, None
+    parts = [p for p in (u.path or "").split("/") if p]
+    if len(parts) >= 2 and parts[0] == "channel" and parts[1].startswith("UC"):
+        return parts[1], None
+    if parts and parts[0].startswith("@"):
+        return None, parts[0][1:]
+    return None, None
+
+def resolve_channel_id(channel_input: str) -> Optional[str]:
+    cid, handle = _extract_channel_id_or_handle(channel_input)
+    if cid:
+        return cid
+    if not handle or not YOUTUBE:
+        return None
+    try:
+        r = YOUTUBE.channels().list(part="id", forHandle=handle, maxResults=1).execute()
+        items = r.get("items", [])
+        return items[0].get("id") if items else None
+    except Exception:
+        log.exception("resolve_channel_id failed for handle=%s", handle)
+        return None
+
+def fetch_latest_non_shorts_video_id(channel_id: str) -> Optional[str]:
+    if not YOUTUBE or not channel_id:
+        return None
+    try:
+        sr = YOUTUBE.search().list(
+            part="id",
+            channelId=channel_id,
+            type="video",
+            order="date",
+            maxResults=10
+        ).execute()
+        ids = [it.get("id", {}).get("videoId") for it in sr.get("items", []) if it.get("id", {}).get("videoId")]
+        if not ids:
+            return None
+        vr = YOUTUBE.videos().list(part="contentDetails,snippet", id=",".join(ids), maxResults=min(10, len(ids))).execute()
+        for item in vr.get("items", []):
+            dur = item.get("contentDetails", {}).get("duration") or ""
+            # Shorts are generally <= 60s; exclude those
+            if dur.startswith("PT") and "M" not in dur and "H" not in dur:
+                sec = int((dur[2:-1] or "0")) if dur.endswith("S") else 0
+                if sec <= 60:
+                    continue
+            title = (item.get("snippet", {}).get("title") or "").lower()
+            if "#short" in title:
+                continue
+            return item.get("id")
+    except Exception:
+        log.exception("fetch_latest_non_shorts_video_id failed for channel=%s", channel_id)
+    return None
 
 # Add near the other globals
 _channel_id_cache: Dict[str, Tuple[Optional[str], float]] = {}
@@ -1520,6 +1603,49 @@ def mrbeast_10min_sampler_loop():
             log.exception("MrBeast 10-min sampler error: %s", e)
             time.sleep(5)
 
+def auto_track_scheduler_loop():
+    log.info("Auto-track scheduler started.")
+    while True:
+        try:
+            now = datetime.now(timezone.utc)
+            conn = db()
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, channel_id FROM auto_track_jobs "
+                    "WHERE status='scheduled' AND run_time_utc<=%s "
+                    "ORDER BY run_time_utc ASC LIMIT 20",
+                    (now,)
+                )
+                jobs = cur.fetchall()
+            for job in jobs:
+                latest_video_id = fetch_latest_non_shorts_video_id(job["channel_id"])
+                if not latest_video_id:
+                    with conn.cursor() as cur:
+                        cur.execute("UPDATE auto_track_jobs SET status='no_video', processed_at=NOW() WHERE id=%s", (job["id"],))
+                    continue
+                title = fetch_title(latest_video_id)
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO video_list (video_id, name, is_tracking, is_deleted)
+                        VALUES (%s, %s, TRUE, FALSE)
+                        ON CONFLICT (video_id) DO UPDATE SET name=EXCLUDED.name, is_tracking=TRUE, is_deleted=FALSE
+                    """, (latest_video_id, title))
+                    cur.execute("UPDATE auto_track_jobs SET status='added', added_video_id=%s, processed_at=NOW() WHERE id=%s", (latest_video_id, job["id"]))
+                stats = fetch_stats_batch([latest_video_id]).get(latest_video_id)
+                if stats:
+                    safe_store(latest_video_id, stats)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE video_list v SET is_tracking=FALSE "
+                    "FROM auto_track_jobs j "
+                    "WHERE j.status='added' AND j.added_video_id=v.video_id "
+                    "AND j.processed_at + INTERVAL '30 hours' <= %s AND v.is_deleted=FALSE",
+                    (now,)
+                )
+        except Exception:
+            log.exception("auto_track_scheduler_loop error")
+        time.sleep(60)
+
 
 def start_background():
     global _sampler_started
@@ -1539,6 +1665,9 @@ def start_background():
                 t3 = threading.Thread(target=mrbeast_10min_sampler_loop, daemon=True, name="mrbeast-10min-sampler")
                 t3.start()
                 log.info("MRBeast 10-min sampler thread started.")
+            t4 = threading.Thread(target=auto_track_scheduler_loop, daemon=True, name="auto-track-scheduler")
+            t4.start()
+            log.info("Auto-track scheduler thread started.")
 
             _sampler_started = True
 
@@ -3673,6 +3802,11 @@ def home():
             "ORDER BY is_deleted ASC, name"
         )
         videos = cur.fetchall()
+        cur.execute(
+            "SELECT channel_input, channel_id, run_time_utc, status, added_video_id "
+            "FROM auto_track_jobs ORDER BY created_at DESC LIMIT 10"
+        )
+        auto_jobs = cur.fetchall()
     t_db_videos = time.time()
 
     video_ids = [v["video_id"] for v in videos]
@@ -3721,7 +3855,7 @@ def home():
     log.info("home timings: db_videos=%.3fs ch_map=%.3fs ch_totals=%.3fs latest_samples=%.3fs total=%.3fs",
              t_db_videos - t0, t_ch_map - t_db_videos, t_ch_totals - t_ch_map, t_latest_samples - t_ch_totals, t_end - t0)
 
-    return render_template("home.html", videos=vids)
+    return render_template("home.html", videos=vids, auto_jobs=auto_jobs)
 
 
 @app.get("/home/json")
@@ -4098,6 +4232,33 @@ def add_video():
     safe_store(video_id, stats)
     flash(f"Now tracking: {title}", "success")
     return redirect(url_for("video_detail", video_id=video_id))
+
+@app.post("/schedule_channel_track")
+@login_required
+def schedule_channel_track():
+    channel_input = (request.form.get("channel_input") or "").strip()
+    schedule_at = (request.form.get("schedule_at") or "").strip()
+    if not channel_input or not schedule_at:
+        flash("Provide channel link/ID and schedule time.", "warning")
+        return redirect(url_for("home"))
+    channel_id = resolve_channel_id(channel_input)
+    if not channel_id:
+        flash("Could not resolve channel ID from input.", "danger")
+        return redirect(url_for("home"))
+    try:
+        local_dt = datetime.fromisoformat(schedule_at)
+        run_time_utc = local_dt.replace(tzinfo=IST).astimezone(timezone.utc)
+    except Exception:
+        flash("Invalid schedule time.", "danger")
+        return redirect(url_for("home"))
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO auto_track_jobs (channel_id, channel_input, run_time_utc, created_by) VALUES (%s, %s, %s, %s)",
+            (channel_id, channel_input, run_time_utc, g.user.get("id"))
+        )
+    flash(f"Scheduled auto-track for channel {channel_id} at {local_dt.strftime('%Y-%m-%d %H:%M')} IST.", "success")
+    return redirect(url_for("home"))
 
 
 @app.post("/add_target/<video_id>")

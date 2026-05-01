@@ -241,6 +241,24 @@
       <span class="subtle small">Includes soft-deleted videos.</span>
     </div>
   </section>
+  <section class="frost toolbar mb-3">
+    <form method="POST" action="{{ url_for('schedule_channel_track') }}">
+      <input class="form-control" type="text" name="channel_input" placeholder="Channel ID or link (e.g. https://youtube.com/@handle)" required>
+      <input class="form-control" type="datetime-local" name="schedule_at" required>
+      <button class="btn btn-brand" type="submit">Schedule Auto-Track</button>
+    </form>
+    <div class="toolbar-search">
+      <span class="subtle small">At scheduled time, latest non-Short video is auto-added and auto-paused after 30 hours.</span>
+      {% if auto_jobs %}
+        <div class="subtle small mt-1">
+          Latest jobs:
+          {% for j in auto_jobs[:3] %}
+            <div>• {{ j.channel_id }} — {{ j.run_time_utc.astimezone().strftime('%Y-%m-%d %H:%M') }} ({{ j.status }}){% if j.added_video_id %} → {{ j.added_video_id }}{% endif %}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </div>
+  </section>
 
   <section class="frost videos-wrap">
     <div class="videos-head">
