@@ -15,12 +15,13 @@
 
   <div class="card bg-black border-secondary">
     <div class="card-body">
-      <h5 class="card-title">Day 1 Closest Historical Match</h5>
+      <h5 class="card-title">Closest Historical Match</h5>
       {% if v.day1_match %}
         <p class="text-secondary mb-3">
           Current video <span class="text-light mono">{{ v.video_id }}</span> matched with
           <span class="text-warning mono">{{ v.day1_match.matched_video_id }}</span>.
-          All comparisons are aligned by time since upload with ±5 second tolerance.
+          All comparisons are aligned by time since upload.
+          Closest aligned point gap: <span class="text-info">{{ v.day1_match.matched_point_gap_sec }}s</span>.
         </p>
         <div class="table-responsive">
           <table class="table table-dark table-sm align-middle">
@@ -47,7 +48,7 @@
           </table>
         </div>
       {% else %}
-        <div class="alert alert-warning mb-0">No eligible Day 1 historical match found yet for this video.</div>
+        <div class="alert alert-warning mb-0">No eligible historical match found yet for this video.</div>
       {% endif %}
     </div>
   </div>

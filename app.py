@@ -1862,7 +1862,9 @@ def find_closest_day1_video_match(current_video_id: str, current_ts: Optional[da
     if current_since_upload < 0:
         return None
 
-    window_end = max(current_since_upload, 86400) + 5
+    # Keep rows up to the current video's age so we can compare at the same
+    # upload-relative moment even beyond Day 1.
+    window_end = current_since_upload + 300
     with conn.cursor() as cur:
         cur.execute(
             "SELECT video_id, ts_utc, views FROM views WHERE video_id = ANY(%s) ORDER BY video_id, ts_utc ASC",
@@ -1899,17 +1901,18 @@ def find_closest_day1_video_match(current_video_id: str, current_ts: Optional[da
         if len(pts) < 2:
             continue
         candidate = min(pts, key=lambda p: abs(p[0] - current_since_upload))
-        if abs(candidate[0] - current_since_upload) > 5:
-            continue
+        time_gap = abs(candidate[0] - current_since_upload)
         hist_growth = None
         cidx = pts.index(candidate)
         if cidx > 0:
             hist_growth = candidate[1] - pts[cidx - 1][1]
         if hist_growth is None:
             continue
-        score = abs(candidate[1] - current_match[1]) + abs(hist_growth - current_growth)
+        # Prefer close view/growth behavior; use a soft time-gap penalty so we
+        # still get a match even when strict ±5s data is unavailable.
+        score = abs(candidate[1] - current_match[1]) + abs(hist_growth - current_growth) + int(time_gap * 0.25)
         if best is None or score < best["score"]:
-            best = {"video_id": hid, "score": score}
+            best = {"video_id": hid, "score": score, "time_gap_sec": int(time_gap)}
 
     if not best:
         return None
@@ -1923,7 +1926,7 @@ def find_closest_day1_video_match(current_video_id: str, current_ts: Optional[da
         target = h * 3600
         cur = min(cur_pts, key=lambda p: abs(p[0] - target)) if cur_pts else None
         his = min(his_pts, key=lambda p: abs(p[0] - target)) if his_pts else None
-        if not cur or not his or abs(cur[0] - target) > 5 or abs(his[0] - target) > 5:
+        if not cur or not his:
             current_hr.append({"hour": h, "views": None, "growth": None})
             matched_hr.append({"hour": h, "views": None, "growth": None})
             continue
@@ -1941,6 +1944,7 @@ def find_closest_day1_video_match(current_video_id: str, current_ts: Optional[da
     return {
         "matched_video_id": matched_id,
         "current_since_upload_sec": int(current_since_upload),
+        "matched_point_gap_sec": best.get("time_gap_sec", 0),
         "hourly_comparison": [
             {"hour": h, "current": current_hr[h - 1], "matched": matched_hr[h - 1]}
             for h in range(1, 25)
