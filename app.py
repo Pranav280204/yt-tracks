@@ -2016,7 +2016,7 @@ def find_closest_day1_video_match(
         return None
     conn = db()
     with conn.cursor() as cur:
-        # Consider all historical videos (tracking, non-tracking, and soft-deleted)
+        # Consider all historical videos (tracking, paused, and non-tracking)
         # so comparison is not restricted to active tracking items only.
         cur.execute("SELECT video_id FROM video_list WHERE video_id<>%s", (current_video_id,))
         historical_ids = [r["video_id"] for r in cur.fetchall()]
@@ -3818,7 +3818,14 @@ def admin_users():
 def healthz():
     return "ok", 200
 
+
 @app.get("/")
+def landing():
+    if g.user:
+        return redirect(url_for("home"))
+    return render_template("landing.html")
+
+@app.get("/dashboard")
 @login_required
 def home():
     t0 = time.time()
