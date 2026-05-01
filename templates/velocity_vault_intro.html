@@ -35,6 +35,7 @@
 
         <div class="d-flex gap-2 flex-wrap">
           <form method="post" action="{{ url_for('velocity_vault_intro_ack', video_id=v.video_id) }}">
+            <input type="hidden" name="exclude_weekends" value="{{ '1' if v.exclude_weekends else '0' }}">
             <button type="submit" class="btn btn-warning">Continue to Velocity Vault</button>
           </form>
           <a href="{{ url_for('video_detail', video_id=v.video_id) }}" class="btn btn-outline-light">Back to Video</a>

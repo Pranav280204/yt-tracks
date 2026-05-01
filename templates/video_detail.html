@@ -286,7 +286,7 @@
         <div class="small-note mb-2">Quick actions</div>
         <div class="d-grid gap-2">
           <a class="btn btn-sm btn-outline-primary" href="{{ url_for('video_stats', video_id=v.video_id) }}">More stats</a>
-          <a class="btn btn-sm btn-outline-warning" href="{{ url_for('video_velocity_vault', video_id=v.video_id) }}">Find Closest Match</a>
+          <a class="btn btn-sm btn-outline-warning" href="{{ url_for('video_velocity_vault', video_id=v.video_id, exclude_weekends='1' if v.exclude_weekends else None) }}">Find Closest Match</a>
         </div>
       </div>
 
@@ -294,7 +294,7 @@
       <div class="card p-3 mt-3">
         <div class="d-flex justify-content-between align-items-center mb-2">
           <strong>Closest Historical Match</strong>
-          <a class="btn btn-sm btn-outline-warning" href="{{ url_for('video_velocity_vault', video_id=v.video_id) }}">Open Vault</a>
+          <a class="btn btn-sm btn-outline-warning" href="{{ url_for('video_velocity_vault', video_id=v.video_id, exclude_weekends='1' if v.exclude_weekends else None) }}">Open Vault</a>
         </div>
         {% if v.day1_match %}
           <div class="small-note mb-2">

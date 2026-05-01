@@ -9,9 +9,16 @@
 <body class="bg-dark text-light">
 <div class="container py-4">
   <div class="d-flex justify-content-between align-items-center mb-3">
-    <a class="btn btn-sm btn-outline-light" href="{{ url_for('video_detail', video_id=v.video_id) }}">← Back to video</a>
+    <a class="btn btn-sm btn-outline-light" href="{{ url_for('video_detail', video_id=v.video_id, exclude_weekends='1' if v.exclude_weekends else None) }}">← Back to video</a>
     <h4 class="mb-0">🚀 Velocity Vault</h4>
   </div>
+  <form method="get" class="mb-3">
+    <input type="hidden" name="exclude_weekends" value="0">
+    <div class="form-check form-switch">
+      <input class="form-check-input" type="checkbox" id="excludeWeekendsToggle" name="exclude_weekends" value="1" {% if v.exclude_weekends %}checked{% endif %} onchange="this.form.submit()">
+      <label class="form-check-label" for="excludeWeekendsToggle">Exclude Saturday and Sunday while finding closest match</label>
+    </div>
+  </form>
 
   <div class="card bg-black border-secondary">
     <div class="card-body">

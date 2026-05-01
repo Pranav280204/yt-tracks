@@ -1549,7 +1549,7 @@ def start_background():
 # -----------------------------
 # Helper: build display data for one video
 # -----------------------------
-def build_video_display(vid: str):
+def build_video_display(vid: str, exclude_weekends: bool = False):
     """
     Build display data for a video:
      - fetches only recent rows (bounded window)
@@ -1795,7 +1795,12 @@ def build_video_display(vid: str):
 
     compare_meta = None
 
-    day1_match = find_closest_day1_video_match(vid, latest_ts, latest_views)
+    day1_match = find_closest_day1_video_match(
+        vid,
+        latest_ts,
+        latest_views,
+        exclude_weekends=exclude_weekends
+    )
 
     result = {
         "video_id": vrow["video_id"],
@@ -1814,6 +1819,7 @@ def build_video_display(vid: str):
         "thumbnail_changed": bool(vrow.get("thumbnail_changed")),
         "thumbnail_changed_at": vrow.get("thumbnail_changed_at"),
         "day1_match": day1_match,
+        "exclude_weekends": bool(exclude_weekends),
     }
 
     # cache it
@@ -1843,7 +1849,12 @@ def _fetch_published_at_map(video_ids: list[str]) -> dict[str, datetime]:
     return out
 
 
-def find_closest_day1_video_match(current_video_id: str, current_ts: Optional[datetime], current_views: Optional[int]):
+def find_closest_day1_video_match(
+    current_video_id: str,
+    current_ts: Optional[datetime],
+    current_views: Optional[int],
+    exclude_weekends: bool = False
+):
     if not current_ts or current_views is None:
         return None
     conn = db()
@@ -1851,7 +1862,7 @@ def find_closest_day1_video_match(current_video_id: str, current_ts: Optional[da
         # Consider all historical videos (tracking, non-tracking, and soft-deleted)
         # so comparison is not restricted to active tracking items only.
         cur.execute("SELECT video_id FROM video_list WHERE video_id<>%s", (current_video_id,))
-        historical_ids = [r["video_id"] for r in cur.fetchall()]
+    historical_ids = [r["video_id"] for r in cur.fetchall()]
     if not historical_ids:
         return None
 
@@ -1860,6 +1871,13 @@ def find_closest_day1_video_match(current_video_id: str, current_ts: Optional[da
     current_pub = published_map.get(current_video_id)
     if not current_pub:
         return None
+    if exclude_weekends:
+        historical_ids = [
+            hid for hid in historical_ids
+            if published_map.get(hid) and published_map[hid].weekday() not in {5, 6}
+        ]
+        if not historical_ids:
+            return None
     current_since_upload = (current_ts - current_pub).total_seconds()
     if current_since_upload < 0:
         return None
@@ -3871,7 +3889,8 @@ def mrbeast_stats():
 @app.get("/video/<video_id>")
 @login_required
 def video_detail(video_id):
-    info = build_video_display(video_id)
+    exclude_weekends = request.args.get("exclude_weekends") == "1"
+    info = build_video_display(video_id, exclude_weekends=exclude_weekends)
     if info is None:
         flash("Video not found.", "warning")
         return redirect(url_for("home"))
@@ -3893,7 +3912,8 @@ def video_detail(video_id):
 @login_required
 def velocity_vault_intro(video_id):
     """One-time intro page for the closest historical match feature."""
-    info = build_video_display(video_id)
+    exclude_weekends = request.args.get("exclude_weekends") == "1"
+    info = build_video_display(video_id, exclude_weekends=exclude_weekends)
     if info is None:
         flash("Video not found.", "warning")
         return redirect(url_for("home"))
@@ -3905,7 +3925,8 @@ def velocity_vault_intro(video_id):
 @app.post("/video/<video_id>/velocity-vault-intro/ack")
 @login_required
 def velocity_vault_intro_ack(video_id):
-    response = make_response(redirect(url_for("video_velocity_vault", video_id=video_id)))
+    exclude_weekends = request.form.get("exclude_weekends") == "1"
+    response = make_response(redirect(url_for("video_velocity_vault", video_id=video_id, exclude_weekends="1" if exclude_weekends else None)))
     response.set_cookie(
         f"vault_intro_seen_{video_id}",
         "1",
@@ -3921,10 +3942,11 @@ def video_velocity_vault(video_id):
     """
     Dedicated page for Day-1 closest historical comparison aligned by time since upload.
     """
+    exclude_weekends = request.args.get("exclude_weekends") == "1"
     if request.cookies.get(f"vault_intro_seen_{video_id}") != "1":
-        return redirect(url_for("velocity_vault_intro", video_id=video_id))
+        return redirect(url_for("velocity_vault_intro", video_id=video_id, exclude_weekends="1" if exclude_weekends else None))
 
-    info = build_video_display(video_id)
+    info = build_video_display(video_id, exclude_weekends=exclude_weekends)
     if info is None:
         flash("Video not found.", "warning")
         return redirect(url_for("home"))
