@@ -681,6 +681,28 @@ def fetch_title(video_id: str) -> str:
         log.exception("Title fetch error: %s", e)
         return "Unknown"
 
+def fetch_video_published_at(video_id: str) -> Optional[datetime]:
+    """Return video's YouTube publishedAt as timezone-aware UTC datetime."""
+    if not YOUTUBE:
+        return None
+    try:
+        resp = YOUTUBE.videos().list(
+            part="snippet",
+            id=video_id,
+            maxResults=1,
+            fields="items(snippet/publishedAt)"
+        ).execute()
+        items = resp.get("items", [])
+        if not items:
+            return None
+        published_raw = items[0].get("snippet", {}).get("publishedAt")
+        if not published_raw:
+            return None
+        return datetime.fromisoformat(published_raw.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except Exception as e:
+        log.exception("PublishedAt fetch error for %s: %s", video_id, e)
+        return None
+
 # Add near the other globals
 _channel_id_cache: Dict[str, Tuple[Optional[str], float]] = {}
 _CHANNEL_ID_CACHE_TTL = 60.0  # seconds
@@ -3157,6 +3179,121 @@ def fetch_hourly_for_ist_date(video_id: str, date_ist):
 
     return results
 
+
+def _get_rows_for_video_day1(video_id: str):
+    published_at = fetch_video_published_at(video_id)
+    if not published_at:
+        return None, []
+    end_utc = published_at + timedelta(hours=24)
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT ts_utc, views FROM views WHERE video_id=%s AND ts_utc >= %s AND ts_utc <= %s ORDER BY ts_utc ASC",
+            (video_id, published_at, end_utc),
+        )
+        rows = cur.fetchall()
+    return published_at, [{"ts_utc": r["ts_utc"], "views": int(r["views"])} for r in rows]
+
+
+def _value_at_elapsed_seconds(rows_asc: list[dict], published_at: datetime, elapsed_seconds: int, tolerance_seconds: int = 5):
+    target_ts = published_at + timedelta(seconds=max(0, elapsed_seconds))
+    lo = target_ts - timedelta(seconds=tolerance_seconds)
+    hi = target_ts + timedelta(seconds=tolerance_seconds)
+    best = None
+    for row in rows_asc:
+        ts = row["ts_utc"]
+        if ts < lo or ts > hi:
+            continue
+        delta = abs((ts - target_ts).total_seconds())
+        if best is None or delta < best[0]:
+            best = (delta, row)
+    return None if best is None else int(best[1]["views"])
+
+
+def _build_day1_hourly_profile(rows_asc: list[dict], published_at: datetime, tolerance_seconds: int = 5):
+    out = []
+    prev_views = None
+    for hour in range(1, 25):
+        views = _value_at_elapsed_seconds(rows_asc, published_at, hour * 3600, tolerance_seconds=tolerance_seconds)
+        growth = None if (views is None or prev_views is None) else int(views - prev_views)
+        out.append({"hour": hour, "views": views, "growth": growth})
+        if views is not None:
+            prev_views = views
+    return out
+
+
+def find_closest_day1_match(current_video_id: str, current_views: int, seconds_since_upload: int, tolerance_seconds: int = 5):
+    current_published_at, current_rows = _get_rows_for_video_day1(current_video_id)
+    if not current_published_at or not current_rows:
+        return None
+    current_at_elapsed = _value_at_elapsed_seconds(current_rows, current_published_at, seconds_since_upload, tolerance_seconds=tolerance_seconds)
+    if current_at_elapsed is None:
+        current_at_elapsed = int(current_views)
+    current_prev = _value_at_elapsed_seconds(current_rows, current_published_at, seconds_since_upload - 3600, tolerance_seconds=tolerance_seconds)
+    current_growth = None if current_prev is None else int(current_at_elapsed - current_prev)
+
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("SELECT video_id, name FROM video_list WHERE is_deleted=FALSE AND video_id<>%s", (current_video_id,))
+        candidates = cur.fetchall()
+
+    best = None
+    for candidate in candidates:
+        hist_video_id = candidate["video_id"]
+        hist_published_at, hist_rows = _get_rows_for_video_day1(hist_video_id)
+        if not hist_published_at or not hist_rows:
+            continue
+        hist_at_elapsed = _value_at_elapsed_seconds(hist_rows, hist_published_at, seconds_since_upload, tolerance_seconds=tolerance_seconds)
+        if hist_at_elapsed is None:
+            continue
+        hist_prev = _value_at_elapsed_seconds(hist_rows, hist_published_at, seconds_since_upload - 3600, tolerance_seconds=tolerance_seconds)
+        hist_growth = None if hist_prev is None else int(hist_at_elapsed - hist_prev)
+        distance = abs(int(current_at_elapsed) - int(hist_at_elapsed))
+        if current_growth is not None and hist_growth is not None:
+            distance += abs(int(current_growth) - int(hist_growth))
+        if best is None or distance < best["distance"]:
+            best = {
+                "video_id": hist_video_id,
+                "name": candidate["name"],
+                "distance": int(distance),
+                "published_at": hist_published_at,
+                "rows": hist_rows,
+                "views_at_elapsed": int(hist_at_elapsed),
+                "growth_at_elapsed": None if hist_growth is None else int(hist_growth),
+            }
+
+    if not best:
+        return None
+
+    current_profile = _build_day1_hourly_profile(current_rows, current_published_at, tolerance_seconds=tolerance_seconds)
+    match_profile = _build_day1_hourly_profile(best["rows"], best["published_at"], tolerance_seconds=tolerance_seconds)
+    hourly = []
+    for idx in range(24):
+        hourly.append({
+            "hour": current_profile[idx]["hour"],
+            "current_video": current_profile[idx],
+            "matched_video": match_profile[idx],
+        })
+
+    return {
+        "current_video": {
+            "video_id": current_video_id,
+            "seconds_since_upload": int(seconds_since_upload),
+            "views_at_elapsed": int(current_at_elapsed),
+            "growth_at_elapsed": None if current_growth is None else int(current_growth),
+            "published_at_utc": current_published_at.isoformat(),
+        },
+        "closest_match": {
+            "video_id": best["video_id"],
+            "name": best["name"],
+            "distance": best["distance"],
+            "views_at_elapsed": best["views_at_elapsed"],
+            "growth_at_elapsed": best["growth_at_elapsed"],
+            "published_at_utc": best["published_at"].isoformat(),
+        },
+        "hourly_comparison_day1": hourly,
+    }
+
 # Route: stats page
 @app.get("/video/<video_id>/stats")
 @login_required
@@ -3809,6 +3946,31 @@ def video_live_views(video_id):
     except requests.RequestException as exc:
         log.warning("Live view fetch failed for %s: %s", video_id, exc)
         return jsonify({"error": "fetch_failed"}), 502
+
+
+@app.get("/api/video/<video_id>/day1-closest-match")
+@login_required
+def api_day1_closest_match(video_id):
+    views_raw = (request.args.get("views") or "").strip()
+    elapsed_raw = (request.args.get("seconds_since_upload") or "").strip()
+    try:
+        current_views = int(views_raw)
+        seconds_since_upload = int(elapsed_raw)
+        if seconds_since_upload < 0:
+            raise ValueError("seconds_since_upload must be >= 0")
+    except Exception:
+        return jsonify({
+            "error": "invalid_params",
+            "message": "Provide integer query params: views and seconds_since_upload"
+        }), 400
+
+    result = find_closest_day1_match(video_id, current_views, seconds_since_upload, tolerance_seconds=5)
+    if not result:
+        return jsonify({
+            "error": "no_match",
+            "message": "Not enough Day 1 upload-relative data for current video or historical videos."
+        }), 404
+    return jsonify(result)
 
 
 @app.post("/video/<video_id>/refresh")
