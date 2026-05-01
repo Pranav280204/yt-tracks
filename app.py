@@ -2087,8 +2087,9 @@ def find_closest_day1_video_match(
     if current_since_upload < 0:
         return None
 
-    # Build hourly matching on first 24 upload-relative hours.
-    window_end = 86400 + 600
+    # Build hourly matching using the maximum coverage available for the
+    # current video (not fixed to Day 1).
+    window_end = max(86400 + 600, int(current_since_upload) + 600)
     with conn.cursor() as cur:
         cur.execute(
             "SELECT video_id, ts_utc, views FROM views WHERE video_id = ANY(%s) ORDER BY video_id, ts_utc ASC",
@@ -2184,7 +2185,7 @@ def find_closest_day1_video_match(
 
         score = int(score / overlap)
         if best is None or score < best["score"]:
-            best = {"video_id": hid, "score": score, "overlap": overlap, "hourly": hist_hourly}
+            best = {"video_id": hid, "score": score, "overlap": overlap, "hourly": hist_hourly, "pair_max_hour": pair_max_hour}
 
     if not best:
         return None
@@ -2194,7 +2195,8 @@ def find_closest_day1_video_match(
     matched_hr = []
     matched_hourly = best["hourly"]
     current_pub_ist = current_pub.astimezone(IST)
-    for h in range(1, 25):
+    max_display_hour = int(best.get("pair_max_hour", 24))
+    for h in range(1, max_display_hour + 1):
         c = current_hourly.get(h, {})
         m = matched_hourly.get(h, {})
         start_hr = (current_pub_ist.hour + (h - 1)) % 24
@@ -2209,7 +2211,7 @@ def find_closest_day1_video_match(
         "overlap_hours": best.get("overlap", 0),
         "hourly_comparison": [
             {"hour": h, "current": current_hr[h - 1], "matched": matched_hr[h - 1]}
-            for h in range(1, 25)
+            for h in range(1, max_display_hour + 1)
         ],
     }
 
