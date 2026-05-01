@@ -6,99 +6,56 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
-    :root{--bg:#060914;--panel:rgba(15,20,35,.66);--panel-2:rgba(16,24,44,.82);--text:#f3f6ff;--muted:#aeb8d3;--line:rgba(167,185,255,.22);--g1:#5f7cff;--g2:#8b5cf6;--ok:#61e7c2}
-    *{box-sizing:border-box} body{margin:0;min-height:100vh;color:var(--text);font-family:Inter,Segoe UI,Roboto,sans-serif;background:
-      radial-gradient(1200px 500px at -10% -10%,rgba(95,124,255,.35),transparent 60%),
-      radial-gradient(800px 400px at 110% 0,rgba(139,92,246,.3),transparent 60%),
-      linear-gradient(135deg,#060914 0%,#090f1d 45%,#0b1326 100%);
-    }
-    .wrap{max-width:1180px;margin:auto;min-height:100vh;padding:1rem;display:grid;align-items:center}
-    .layout{display:grid;grid-template-columns:1.12fr .88fr;gap:1rem}
-    .glass{background:linear-gradient(175deg,var(--panel),var(--panel-2));border:1px solid var(--line);border-radius:22px;box-shadow:0 24px 70px rgba(2,6,20,.55);backdrop-filter: blur(12px)}
-    .left{padding:2rem;position:relative;overflow:hidden}
-    .badge-chip{display:inline-flex;gap:.45rem;align-items:center;padding:.36rem .75rem;border-radius:999px;background:rgba(95,124,255,.15);border:1px solid rgba(95,124,255,.45);font-size:.82rem;color:#d7e1ff}
-    h1{margin:.95rem 0 .65rem;font-size:clamp(1.7rem,2.8vw,2.5rem);line-height:1.16}
-    .tagline{color:var(--muted);max-width:58ch;line-height:1.64}
-    .feature-list{display:grid;gap:.7rem;margin-top:1.2rem}
-    .f-row{display:flex;gap:.65rem;align-items:flex-start;padding:.75rem .82rem;border-radius:12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.09);transition:.2s transform,.2s border-color}
-    .f-row:hover{transform:translateY(-2px);border-color:rgba(138,164,255,.6)}
-    .icon{width:1.65rem;height:1.65rem;display:grid;place-items:center;border-radius:8px;background:linear-gradient(140deg,var(--g1),var(--g2));font-size:.85rem}
-    .stats{display:flex;gap:.6rem;flex-wrap:wrap;margin-top:1rem}
-    .pill{padding:.4rem .65rem;border-radius:999px;border:1px solid rgba(255,255,255,.14);font-size:.82rem;color:#d8e3ff}
-    .right{padding:1.7rem;max-width:450px;justify-self:center;width:100%}
-    .login-title{font-size:1.38rem;font-weight:700;margin-bottom:.2rem}
-    .help{color:var(--muted);font-size:.93rem}
-    .btn-google{min-height:50px;border:1px solid rgba(255,255,255,.34);font-weight:700;display:flex;align-items:center;justify-content:center;gap:.5rem;transition:transform .18s, box-shadow .18s}
-    .btn-google:hover{transform:translateY(-1px);box-shadow:0 10px 24px rgba(59,130,246,.25)}
-    .trust{margin-top:1rem;border-top:1px dashed rgba(255,255,255,.18);padding-top:.8rem;color:#d8e0fa;font-size:.89rem;display:grid;gap:.4rem}
-    .admin-link{border-color:rgba(255,255,255,.33)}
+    :root{--bg:#f5f7fb;--card:#ffffff;--text:#111827;--muted:#6b7280;--line:#e5e7eb;--brand:#2563eb}
+    *{box-sizing:border-box}
+    body{margin:0;min-height:100vh;background:var(--bg);color:var(--text);font-family:Inter,Segoe UI,Roboto,sans-serif;display:grid;place-items:center;padding:1rem}
+    .login-card{width:min(460px,100%);background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:0 18px 44px rgba(15,23,42,.08);padding:1.4rem}
+    .brand{font-weight:700;font-size:1.1rem;margin-bottom:.2rem}
+    .help{color:var(--muted);font-size:.93rem;margin-bottom:1rem}
+    .btn-google{min-height:48px;border:1px solid #d1d5db;font-weight:600;display:flex;align-items:center;justify-content:center;gap:.45rem}
+    .btn-google:hover{border-color:var(--brand)}
+    .state-list{margin-top:1rem;padding-top:.9rem;border-top:1px dashed var(--line);color:var(--muted);font-size:.88rem;display:grid;gap:.32rem}
     .small-note{font-size:.82rem;color:var(--muted);text-align:center;margin-top:1rem}
-    @media (max-width: 992px){.layout{grid-template-columns:1fr}.left{order:2;padding:1.3rem}.right{order:1;max-width:100%}}
+    .admin-link{border-color:#d1d5db}
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="layout">
-      <section class="glass left" aria-label="VideoTracker value">
-        <span class="badge-chip">🚀 VideoTracker • SaaS Analytics</span>
-        <h1>Track YouTube growth. Make smarter decisions.</h1>
-        <p class="tagline">VideoTracker helps approved, subscribed users monitor channel/video performance, spot momentum shifts, and act on trends before competitors do.</p>
+  <section class="login-card" aria-label="Login section">
+    <div class="brand">VideoTracker</div>
+    <h1 class="h4 mb-2">Welcome back</h1>
+    <p class="help">Use your Google account to continue.</p>
 
-        <div class="feature-list" role="list" aria-label="Feature highlights">
-          <div class="f-row" role="listitem"><span class="icon">📊</span><div><strong>Real-time video analytics</strong><div class="text-secondary">See live performance signals as your content grows.</div></div></div>
-          <div class="f-row" role="listitem"><span class="icon">📈</span><div><strong>Track growth over time</strong><div class="text-secondary">Compare hourly and daily movement with confidence.</div></div></div>
-          <div class="f-row" role="listitem"><span class="icon">🧠</span><div><strong>Smart insights and trends</strong><div class="text-secondary">Understand what’s working and what to optimize next.</div></div></div>
-        </div>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="alert alert-{{ 'secondary' if category=='info' else category }} alert-dismissible fade show" role="alert">
+            {{ message }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
 
-        <div class="stats">
-          <span class="pill">Track 1000+ videos</span>
-          <span class="pill">Used by creators & analysts</span>
-          <span class="pill">Mobile + desktop ready</span>
-        </div>
-      </section>
+    {% if google_enabled %}
+      <a class="btn btn-light btn-google w-100" href="{{ url_for('google_oauth_login', next=request.args.get('next')) }}">
+        <span>🔐</span><span>Continue with Google</span>
+      </a>
+    {% else %}
+      <div class="alert alert-warning" role="alert">Google login is not configured on the server. Please contact admin.</div>
+    {% endif %}
 
-      <section class="glass right" aria-label="Login section">
-        <div class="login-title">Welcome back 👋</div>
-        <p class="help mb-3">Login with your Google account to continue.</p>
-
-        {% with messages = get_flashed_messages(with_categories=true) %}
-          {% if messages %}
-            {% for category, message in messages %}
-              <div class="alert alert-{{ 'secondary' if category=='info' else category }} alert-dismissible fade show" role="alert">
-                {{ message }}
-                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-              </div>
-            {% endfor %}
-          {% endif %}
-        {% endwith %}
-
-        <div class="alert alert-info py-2 small" role="status">
-          Pending approval → <strong>Your account is under review</strong><br>
-          Rejected → <strong>Access denied. Contact admin</strong><br>
-          Expired → <strong>Renew your plan to continue</strong>
-        </div>
-
-        {% if google_enabled %}
-          <a class="btn btn-light btn-google w-100" href="{{ url_for('google_oauth_login', next=request.args.get('next')) }}">
-            <span>🔐</span><span>Continue with Google</span>
-          </a>
-        {% else %}
-          <div class="alert alert-warning" role="alert">Google login is not configured on the server. Please contact admin.</div>
-        {% endif %}
-
-        <div class="trust">
-          <div>✅ Secure login via Google</div>
-          <div>✅ Your data is सुरक्षित (safe)</div>
-        </div>
-
-        <div class="mt-3 d-grid">
-          <a class="btn btn-outline-light btn-sm admin-link" href="{{ url_for('admin_users') }}">Admin: Add / Manage Users</a>
-        </div>
-
-        <div class="small-note">Having trouble logging in? Contact admin: <a href="mailto:1944pranav@gmail.com">1944pranav@gmail.com</a></div>
-      </section>
+    <div class="state-list">
+      <div>Pending approval: your account is under review.</div>
+      <div>Rejected: access denied (contact admin).</div>
+      <div>Expired: renew your plan to continue.</div>
     </div>
-  </div>
+
+    <div class="mt-3 d-grid">
+      <a class="btn btn-outline-secondary btn-sm admin-link" href="{{ url_for('admin_users') }}">Admin: Add / Manage Users</a>
+    </div>
+
+    <div class="small-note">Need help? <a href="mailto:1944pranav@gmail.com">1944pranav@gmail.com</a></div>
+  </section>
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

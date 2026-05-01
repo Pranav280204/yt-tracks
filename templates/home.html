@@ -238,7 +238,7 @@
     </form>
     <div class="toolbar-search">
       <input class="form-control" id="homeSearchInput" type="search" placeholder="Search videos by title, ID, or status...">
-      <span class="subtle small">Includes soft-deleted videos.</span>
+      <span class="subtle small">Includes non-tracking videos.</span>
     </div>
   </section>
   <section class="frost toolbar mb-3">
@@ -280,7 +280,7 @@
     {% if videos|length == 0 %}
       <div class="empty">No videos available yet — add one using the form above.</div>
     {% else %}
-      {% for section_title, section_videos in [("Tracking", tracking_videos), ("Paused", paused_videos), ("Soft Deleted", deleted_videos)] %}
+      {% for section_title, section_videos in [("Tracking", tracking_videos), ("Paused", paused_videos), ("Non-Tracking", deleted_videos)] %}
         <div class="mb-4">
           <h3 class="h5 mb-3">{{ section_title }} ({{ section_videos|length }})</h3>
           {% if section_videos|length == 0 %}
@@ -288,7 +288,7 @@
           {% else %}
             <div class="grid" id="{% if loop.first %}videoGrid{% endif %}">
               {% for v in section_videos %}
-                <article class="video-card" data-video-id="{{ v.video_id }}" data-search="{{ (v.short_title ~ ' ' ~ v.video_id ~ ' ' ~ ('soft-deleted' if v.is_deleted else ('tracking' if v.is_tracking else 'paused'))) | lower }}">
+                <article class="video-card" data-video-id="{{ v.video_id }}" data-search="{{ (v.short_title ~ ' ' ~ v.video_id ~ ' ' ~ ('non-tracking' if v.is_deleted else ('tracking' if v.is_tracking else 'paused'))) | lower }}">
                   <a class="no-decor" href="{{ url_for('video_detail', video_id=v.video_id) }}">
                     <div class="thumb-wrap">
                       <img class="thumb-img" src="{{ v.thumbnail }}" alt="thumbnail for {{ v.short_title }}">
@@ -305,7 +305,7 @@
                         <div>{{ v.video_id }}</div>
                         <div>
                           {% if v.is_deleted %}
-                            <span class="status deleted">soft-deleted</span>
+                            <span class="status deleted">non-tracking</span>
                           {% elif v.is_tracking %}
                             <span class="status active">tracking</span>
                           {% else %}
