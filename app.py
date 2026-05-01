@@ -2125,12 +2125,12 @@ def find_closest_day1_video_match(
                 return int(round(val)), nearest_gap
         return None, None
 
-    def hourly_points(points: list[tuple[float, int]]) -> dict[int, dict]:
+    def hourly_points(points: list[tuple[float, int]], max_hour: int = 24) -> dict[int, dict]:
         out = {}
         if len(points) < 2:
             return out
         prev_end_views = None
-        for h in range(1, 25):
+        for h in range(1, max(1, min(24, max_hour)) + 1):
             target = h * 3600
             end_views, gap = interp_value(points, target)
             growth = None
@@ -2142,18 +2142,30 @@ def find_closest_day1_video_match(
         return out
 
     current_points = series.get(current_video_id, [])
-    current_hourly = hourly_points(current_points)
+    current_hourly = hourly_points(current_points, max_hour=24)
     if not current_hourly:
         return None
 
+    # Dynamically cap overlap by each series' observed coverage.
+    # We use sampled timelines (not wall-clock since upload) so overlap reflects
+    # what data actually exists for current and matched videos.
+    current_data_max_hour = min(24, max(0, int(current_points[-1][0] // 3600))) if current_points else 0
+
     best = None
     for hid in historical_ids:
-        hist_hourly = hourly_points(series.get(hid, []))
-        if not hist_hourly:
+        hist_points = series.get(hid, [])
+        hist_hourly = hourly_points(hist_points, max_hour=24)
+        if not hist_hourly or not hist_points:
             continue
+
+        hist_max_hour = min(24, max(0, int(hist_points[-1][0] // 3600)))
+        pair_max_hour = min(current_data_max_hour, hist_max_hour)
+        if pair_max_hour < 2:
+            continue
+
         score = 0
         overlap = 0
-        for h in range(1, 25):
+        for h in range(1, pair_max_hour + 1):
             c = current_hourly.get(h)
             m = hist_hourly.get(h)
             if not c or not m:
@@ -2164,11 +2176,12 @@ def find_closest_day1_video_match(
             score += abs(c["views"] - m["views"])
             score += abs(c["growth"] - m["growth"]) * 2
             score += int((c["gap"] + m["gap"]) * 0.1)
-        # Allow early-day matching once at least 3 hourly windows overlap.
-        # Previously this required 6 windows, which made fresh videos show
-        # "No eligible historical match" for too long.
-        if overlap < 3:
+
+        # Dynamically require enough overlap relative to what is possible.
+        min_required_overlap = max(1, min(3, pair_max_hour - 1))
+        if overlap < min_required_overlap:
             continue
+
         score = int(score / overlap)
         if best is None or score < best["score"]:
             best = {"video_id": hid, "score": score, "overlap": overlap, "hourly": hist_hourly}
