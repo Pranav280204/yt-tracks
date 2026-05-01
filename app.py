@@ -1795,6 +1795,8 @@ def build_video_display(vid: str):
 
     compare_meta = None
 
+    day1_match = find_closest_day1_video_match(vid, latest_ts, latest_views)
+
     result = {
         "video_id": vrow["video_id"],
         "name": vrow["name"],
@@ -1810,7 +1812,8 @@ def build_video_display(vid: str):
         "thumbnail_url": vrow.get("thumbnail_url"),
         "thumbnail_prev_url": vrow.get("thumbnail_prev_url"),
         "thumbnail_changed": bool(vrow.get("thumbnail_changed")),
-        "thumbnail_changed_at": vrow.get("thumbnail_changed_at")
+        "thumbnail_changed_at": vrow.get("thumbnail_changed_at"),
+        "day1_match": day1_match,
     }
 
     # cache it
@@ -1818,6 +1821,135 @@ def build_video_display(vid: str):
         _video_display_cache[vid] = (result, time.time())
 
     return result
+
+
+def _fetch_published_at_map(video_ids: list[str]) -> dict[str, datetime]:
+    if not YOUTUBE or not video_ids:
+        return {}
+    out: dict[str, datetime] = {}
+    for i in range(0, len(video_ids), 50):
+        chunk = video_ids[i:i + 50]
+        try:
+            resp = YOUTUBE.videos().list(part="snippet", id=",".join(chunk), maxResults=50).execute()
+            for item in resp.get("items", []):
+                vid = item.get("id")
+                published_raw = item.get("snippet", {}).get("publishedAt")
+                if not vid or not published_raw:
+                    continue
+                dt = datetime.fromisoformat(published_raw.replace("Z", "+00:00")).astimezone(timezone.utc)
+                out[vid] = dt
+        except Exception:
+            continue
+    return out
+
+
+def find_closest_day1_video_match(current_video_id: str, current_ts: Optional[datetime], current_views: Optional[int]):
+    if not current_ts or current_views is None:
+        return None
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("SELECT video_id FROM video_list WHERE video_id<>%s AND is_deleted=FALSE", (current_video_id,))
+        historical_ids = [r["video_id"] for r in cur.fetchall()]
+    if not historical_ids:
+        return None
+
+    all_ids = [current_video_id] + historical_ids
+    published_map = _fetch_published_at_map(all_ids)
+    current_pub = published_map.get(current_video_id)
+    if not current_pub:
+        return None
+    current_since_upload = (current_ts - current_pub).total_seconds()
+    if current_since_upload < 0:
+        return None
+
+    # Keep rows up to the current video's age so we can compare at the same
+    # upload-relative moment even beyond Day 1.
+    window_end = current_since_upload + 300
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT video_id, ts_utc, views FROM views WHERE video_id = ANY(%s) ORDER BY video_id, ts_utc ASC",
+            (all_ids,)
+        )
+        rows = cur.fetchall()
+
+    series = {}
+    for r in rows:
+        vid = r["video_id"]
+        pub = published_map.get(vid)
+        if not pub:
+            continue
+        since = (r["ts_utc"] - pub).total_seconds()
+        if since < 0 or since > window_end:
+            continue
+        series.setdefault(vid, []).append((since, int(r["views"])))
+    current_points = series.get(current_video_id, [])
+    if len(current_points) < 2:
+        return None
+
+    current_match = min(current_points, key=lambda p: abs(p[0] - current_since_upload))
+    current_growth = None
+    for idx in range(1, len(current_points)):
+        if current_points[idx][0] >= current_match[0]:
+            current_growth = current_points[idx][1] - current_points[idx - 1][1]
+            break
+    if current_growth is None:
+        return None
+
+    best = None
+    for hid in historical_ids:
+        pts = series.get(hid, [])
+        if len(pts) < 2:
+            continue
+        candidate = min(pts, key=lambda p: abs(p[0] - current_since_upload))
+        time_gap = abs(candidate[0] - current_since_upload)
+        hist_growth = None
+        cidx = pts.index(candidate)
+        if cidx > 0:
+            hist_growth = candidate[1] - pts[cidx - 1][1]
+        if hist_growth is None:
+            continue
+        # Prefer close view/growth behavior; use a soft time-gap penalty so we
+        # still get a match even when strict ±5s data is unavailable.
+        score = abs(candidate[1] - current_match[1]) + abs(hist_growth - current_growth) + int(time_gap * 0.25)
+        if best is None or score < best["score"]:
+            best = {"video_id": hid, "score": score, "time_gap_sec": int(time_gap)}
+
+    if not best:
+        return None
+
+    matched_id = best["video_id"]
+    current_hr = []
+    matched_hr = []
+    cur_pts = series.get(current_video_id, [])
+    his_pts = series.get(matched_id, [])
+    for h in range(1, 25):
+        target = h * 3600
+        cur = min(cur_pts, key=lambda p: abs(p[0] - target)) if cur_pts else None
+        his = min(his_pts, key=lambda p: abs(p[0] - target)) if his_pts else None
+        if not cur or not his:
+            current_hr.append({"hour": h, "views": None, "growth": None})
+            matched_hr.append({"hour": h, "views": None, "growth": None})
+            continue
+        cur_growth = None
+        his_growth = None
+        cur_i = cur_pts.index(cur)
+        his_i = his_pts.index(his)
+        if cur_i > 0:
+            cur_growth = cur[1] - cur_pts[cur_i - 1][1]
+        if his_i > 0:
+            his_growth = his[1] - his_pts[his_i - 1][1]
+        current_hr.append({"hour": h, "views": cur[1], "growth": cur_growth})
+        matched_hr.append({"hour": h, "views": his[1], "growth": his_growth})
+
+    return {
+        "matched_video_id": matched_id,
+        "current_since_upload_sec": int(current_since_upload),
+        "matched_point_gap_sec": best.get("time_gap_sec", 0),
+        "hourly_comparison": [
+            {"hour": h, "current": current_hr[h - 1], "matched": matched_hr[h - 1]}
+            for h in range(1, 25)
+        ],
+    }
 
 
 # -----------------------------
@@ -3730,6 +3862,19 @@ def video_detail(video_id):
     info["pooling_interval"] = POOLING_INTERVAL
 
     return render_template("video_detail.html", v=info)
+
+
+@app.get("/video/<video_id>/velocity-vault")
+@login_required
+def video_velocity_vault(video_id):
+    """
+    Dedicated page for Day-1 closest historical comparison aligned by time since upload.
+    """
+    info = build_video_display(video_id)
+    if info is None:
+        flash("Video not found.", "warning")
+        return redirect(url_for("home"))
+    return render_template("velocity_vault.html", v=info)
     
 @app.get("/video/<video_id>/json")
 @login_required
