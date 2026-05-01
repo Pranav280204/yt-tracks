@@ -1996,7 +1996,7 @@ def build_video_display(vid: str, exclude_weekends: bool = False, include_day1_m
         "thumbnail_prev_url": vrow.get("thumbnail_prev_url"),
         "thumbnail_changed": bool(vrow.get("thumbnail_changed")),
         "thumbnail_changed_at": vrow.get("thumbnail_changed_at"),
-        "day1_match": day1_match,
+        "day1_match": None,
         "exclude_weekends": bool(exclude_weekends),
     }
 
