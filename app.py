@@ -1862,9 +1862,8 @@ def find_closest_day1_video_match(current_video_id: str, current_ts: Optional[da
     if current_since_upload < 0:
         return None
 
-    # Keep rows up to the current video's age so we can compare at the same
-    # upload-relative moment even beyond Day 1.
-    window_end = current_since_upload + 300
+    # Build hourly matching on first 24 upload-relative hours.
+    window_end = 86400 + 600
     with conn.cursor() as cur:
         cur.execute(
             "SELECT video_id, ts_utc, views FROM views WHERE video_id = ANY(%s) ORDER BY video_id, ts_utc ASC",
@@ -1882,37 +1881,48 @@ def find_closest_day1_video_match(current_video_id: str, current_ts: Optional[da
         if since < 0 or since > window_end:
             continue
         series.setdefault(vid, []).append((since, int(r["views"])))
-    current_points = series.get(current_video_id, [])
-    if len(current_points) < 2:
-        return None
+    def hourly_points(points: list[tuple[float, int]]) -> dict[int, dict]:
+        out = {}
+        if len(points) < 2:
+            return out
+        for h in range(1, 25):
+            target = h * 3600
+            nearest = min(points, key=lambda p: abs(p[0] - target))
+            idx = points.index(nearest)
+            growth = None
+            if idx > 0:
+                growth = nearest[1] - points[idx - 1][1]
+            out[h] = {"views": nearest[1], "growth": growth, "gap": abs(nearest[0] - target)}
+        return out
 
-    current_match = min(current_points, key=lambda p: abs(p[0] - current_since_upload))
-    current_growth = None
-    for idx in range(1, len(current_points)):
-        if current_points[idx][0] >= current_match[0]:
-            current_growth = current_points[idx][1] - current_points[idx - 1][1]
-            break
-    if current_growth is None:
+    current_points = series.get(current_video_id, [])
+    current_hourly = hourly_points(current_points)
+    if not current_hourly:
         return None
 
     best = None
     for hid in historical_ids:
-        pts = series.get(hid, [])
-        if len(pts) < 2:
+        hist_hourly = hourly_points(series.get(hid, []))
+        if not hist_hourly:
             continue
-        candidate = min(pts, key=lambda p: abs(p[0] - current_since_upload))
-        time_gap = abs(candidate[0] - current_since_upload)
-        hist_growth = None
-        cidx = pts.index(candidate)
-        if cidx > 0:
-            hist_growth = candidate[1] - pts[cidx - 1][1]
-        if hist_growth is None:
+        score = 0
+        overlap = 0
+        for h in range(1, 25):
+            c = current_hourly.get(h)
+            m = hist_hourly.get(h)
+            if not c or not m:
+                continue
+            if c["growth"] is None or m["growth"] is None:
+                continue
+            overlap += 1
+            score += abs(c["views"] - m["views"])
+            score += abs(c["growth"] - m["growth"]) * 2
+            score += int((c["gap"] + m["gap"]) * 0.1)
+        if overlap < 6:
             continue
-        # Prefer close view/growth behavior; use a soft time-gap penalty so we
-        # still get a match even when strict ±5s data is unavailable.
-        score = abs(candidate[1] - current_match[1]) + abs(hist_growth - current_growth) + int(time_gap * 0.25)
+        score = int(score / overlap)
         if best is None or score < best["score"]:
-            best = {"video_id": hid, "score": score, "time_gap_sec": int(time_gap)}
+            best = {"video_id": hid, "score": score, "overlap": overlap, "hourly": hist_hourly}
 
     if not best:
         return None
@@ -1920,31 +1930,21 @@ def find_closest_day1_video_match(current_video_id: str, current_ts: Optional[da
     matched_id = best["video_id"]
     current_hr = []
     matched_hr = []
-    cur_pts = series.get(current_video_id, [])
-    his_pts = series.get(matched_id, [])
+    matched_hourly = best["hourly"]
+    current_pub_ist = current_pub.astimezone(IST)
     for h in range(1, 25):
-        target = h * 3600
-        cur = min(cur_pts, key=lambda p: abs(p[0] - target)) if cur_pts else None
-        his = min(his_pts, key=lambda p: abs(p[0] - target)) if his_pts else None
-        if not cur or not his:
-            current_hr.append({"hour": h, "views": None, "growth": None})
-            matched_hr.append({"hour": h, "views": None, "growth": None})
-            continue
-        cur_growth = None
-        his_growth = None
-        cur_i = cur_pts.index(cur)
-        his_i = his_pts.index(his)
-        if cur_i > 0:
-            cur_growth = cur[1] - cur_pts[cur_i - 1][1]
-        if his_i > 0:
-            his_growth = his[1] - his_pts[his_i - 1][1]
-        current_hr.append({"hour": h, "views": cur[1], "growth": cur_growth})
-        matched_hr.append({"hour": h, "views": his[1], "growth": his_growth})
+        c = current_hourly.get(h, {})
+        m = matched_hourly.get(h, {})
+        start_hr = (current_pub_ist.hour + (h - 1)) % 24
+        end_hr = (start_hr + 1) % 24
+        label = f"{start_hr} to {end_hr}"
+        current_hr.append({"hour": h, "label": label, "views": c.get("views"), "growth": c.get("growth")})
+        matched_hr.append({"hour": h, "label": label, "views": m.get("views"), "growth": m.get("growth")})
 
     return {
         "matched_video_id": matched_id,
         "current_since_upload_sec": int(current_since_upload),
-        "matched_point_gap_sec": best.get("time_gap_sec", 0),
+        "overlap_hours": best.get("overlap", 0),
         "hourly_comparison": [
             {"hour": h, "current": current_hr[h - 1], "matched": matched_hr[h - 1]}
             for h in range(1, 25)

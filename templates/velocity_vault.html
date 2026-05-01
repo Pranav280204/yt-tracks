@@ -20,14 +20,14 @@
         <p class="text-secondary mb-3">
           Current video <span class="text-light mono">{{ v.video_id }}</span> matched with
           <span class="text-warning mono">{{ v.day1_match.matched_video_id }}</span>.
-          All comparisons are aligned by time since upload.
-          Closest aligned point gap: <span class="text-info">{{ v.day1_match.matched_point_gap_sec }}s</span>.
+          All comparisons are aligned by upload-relative hourly stats.
+          Overlapping matched hours: <span class="text-info">{{ v.day1_match.overlap_hours }}</span>.
         </p>
         <div class="table-responsive">
           <table class="table table-dark table-sm align-middle">
             <thead>
               <tr>
-                <th>Hour</th>
+                <th>Hour Window</th>
                 <th>Current Views</th>
                 <th>Current Growth</th>
                 <th>Match Views</th>
@@ -37,7 +37,7 @@
             <tbody>
               {% for row in v.day1_match.hourly_comparison %}
               <tr>
-                <td>{{ row.hour }}</td>
+                <td>{{ row.current.label }}</td>
                 <td>{% if row.current.views is not none %}{{ "{:,}".format(row.current.views) }}{% else %}—{% endif %}</td>
                 <td>{% if row.current.growth is not none %}{{ "{:,}".format(row.current.growth) }}{% else %}—{% endif %}</td>
                 <td>{% if row.matched.views is not none %}{{ "{:,}".format(row.matched.views) }}{% else %}—{% endif %}</td>
