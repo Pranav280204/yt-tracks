@@ -2146,14 +2146,26 @@ def find_closest_day1_video_match(
     if not current_hourly:
         return None
 
+    # Dynamically cap overlap by whichever timeline has the least coverage.
+    # This avoids forcing fixed Day-1 style windows when either video is newer
+    # or has sparse data.
+    current_max_hour = min(24, max(0, int(current_since_upload // 3600)))
+
     best = None
     for hid in historical_ids:
-        hist_hourly = hourly_points(series.get(hid, []))
-        if not hist_hourly:
+        hist_points = series.get(hid, [])
+        hist_hourly = hourly_points(hist_points)
+        if not hist_hourly or not hist_points:
             continue
+
+        hist_max_hour = min(24, max(0, int(hist_points[-1][0] // 3600)))
+        pair_max_hour = min(current_max_hour, hist_max_hour)
+        if pair_max_hour < 2:
+            continue
+
         score = 0
         overlap = 0
-        for h in range(1, 25):
+        for h in range(1, pair_max_hour + 1):
             c = current_hourly.get(h)
             m = hist_hourly.get(h)
             if not c or not m:
@@ -2164,11 +2176,12 @@ def find_closest_day1_video_match(
             score += abs(c["views"] - m["views"])
             score += abs(c["growth"] - m["growth"]) * 2
             score += int((c["gap"] + m["gap"]) * 0.1)
-        # Allow early-day matching once at least 3 hourly windows overlap.
-        # Previously this required 6 windows, which made fresh videos show
-        # "No eligible historical match" for too long.
-        if overlap < 3:
+
+        # Dynamically require enough overlap relative to what is possible.
+        min_required_overlap = max(1, min(3, pair_max_hour - 1))
+        if overlap < min_required_overlap:
             continue
+
         score = int(score / overlap)
         if best is None or score < best["score"]:
             best = {"video_id": hid, "score": score, "overlap": overlap, "hourly": hist_hourly}
