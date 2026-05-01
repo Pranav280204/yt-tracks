@@ -248,12 +248,19 @@
       <button class="btn btn-brand" type="submit">Schedule Auto-Track</button>
     </form>
     <div class="toolbar-search">
-      <span class="subtle small">At scheduled time, latest non-Short video is auto-added and auto-paused after 30 hours.</span>
+      <span class="subtle small">Runs every day at the chosen IST time until manually stopped. Latest non-Short video is auto-added and auto-paused after 30 hours.</span>
       {% if auto_jobs %}
         <div class="subtle small mt-1">
           Latest jobs:
           {% for j in auto_jobs[:3] %}
-            <div>• {{ j.channel_id }} — {{ j.run_time_utc.astimezone().strftime('%Y-%m-%d %H:%M') }} ({{ j.status }}){% if j.added_video_id %} → {{ j.added_video_id }}{% endif %}</div>
+            <div class="d-flex align-items-center justify-content-between gap-2">
+              <span>• {{ j.channel_id }} — {{ j.run_time_utc.astimezone().strftime('%Y-%m-%d %H:%M') }} ({{ j.status }}{% if not j.is_active %}, stopped{% endif %}){% if j.added_video_id %} → {{ j.added_video_id }}{% endif %}</span>
+              {% if j.is_active %}
+                <form method="POST" action="{{ url_for('stop_scheduled_channel_track', job_id=j.id) }}">
+                  <button class="btn btn-sm btn-outline-warning" type="submit">Stop</button>
+                </form>
+              {% endif %}
+            </div>
           {% endfor %}
         </div>
       {% endif %}

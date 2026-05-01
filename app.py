@@ -555,10 +555,16 @@ def init_db():
           processed_at TIMESTAMPTZ,
           added_video_id TEXT,
           status TEXT NOT NULL DEFAULT 'scheduled',
+          is_active BOOLEAN NOT NULL DEFAULT TRUE,
+          is_recurring BOOLEAN NOT NULL DEFAULT TRUE,
+          last_added_video_id TEXT,
           created_by INT REFERENCES users(id) ON DELETE SET NULL,
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
         """)
+        cur.execute("ALTER TABLE auto_track_jobs ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE;")
+        cur.execute("ALTER TABLE auto_track_jobs ADD COLUMN IF NOT EXISTS is_recurring BOOLEAN NOT NULL DEFAULT TRUE;")
+        cur.execute("ALTER TABLE auto_track_jobs ADD COLUMN IF NOT EXISTS last_added_video_id TEXT;")
         cur.execute("""
         CREATE INDEX IF NOT EXISTS idx_auto_track_jobs_pending
         ON auto_track_jobs (status, run_time_utc);
@@ -1611,8 +1617,8 @@ def auto_track_scheduler_loop():
             conn = db()
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT id, channel_id FROM auto_track_jobs "
-                    "WHERE status='scheduled' AND run_time_utc<=%s "
+                    "SELECT id, channel_id, is_recurring, last_added_video_id FROM auto_track_jobs "
+                    "WHERE is_active=TRUE AND run_time_utc<=%s "
                     "ORDER BY run_time_utc ASC LIMIT 20",
                     (now,)
                 )
@@ -1621,7 +1627,20 @@ def auto_track_scheduler_loop():
                 latest_video_id = fetch_latest_non_shorts_video_id(job["channel_id"])
                 if not latest_video_id:
                     with conn.cursor() as cur:
-                        cur.execute("UPDATE auto_track_jobs SET status='no_video', processed_at=NOW() WHERE id=%s", (job["id"],))
+                        if job["is_recurring"]:
+                            cur.execute(
+                                "UPDATE auto_track_jobs SET status='no_video', processed_at=NOW(), run_time_utc=run_time_utc + INTERVAL '1 day' WHERE id=%s",
+                                (job["id"],)
+                            )
+                        else:
+                            cur.execute("UPDATE auto_track_jobs SET status='no_video', processed_at=NOW(), is_active=FALSE WHERE id=%s", (job["id"],))
+                    continue
+                if job.get("last_added_video_id") == latest_video_id and job["is_recurring"]:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "UPDATE auto_track_jobs SET status='duplicate_skip', processed_at=NOW(), run_time_utc=run_time_utc + INTERVAL '1 day' WHERE id=%s",
+                            (job["id"],)
+                        )
                     continue
                 title = fetch_title(latest_video_id)
                 with conn.cursor() as cur:
@@ -1630,7 +1649,16 @@ def auto_track_scheduler_loop():
                         VALUES (%s, %s, TRUE, FALSE)
                         ON CONFLICT (video_id) DO UPDATE SET name=EXCLUDED.name, is_tracking=TRUE, is_deleted=FALSE
                     """, (latest_video_id, title))
-                    cur.execute("UPDATE auto_track_jobs SET status='added', added_video_id=%s, processed_at=NOW() WHERE id=%s", (latest_video_id, job["id"]))
+                    if job["is_recurring"]:
+                        cur.execute(
+                            "UPDATE auto_track_jobs SET status='added', added_video_id=%s, last_added_video_id=%s, processed_at=NOW(), run_time_utc=run_time_utc + INTERVAL '1 day' WHERE id=%s",
+                            (latest_video_id, latest_video_id, job["id"])
+                        )
+                    else:
+                        cur.execute(
+                            "UPDATE auto_track_jobs SET status='added', added_video_id=%s, last_added_video_id=%s, processed_at=NOW(), is_active=FALSE WHERE id=%s",
+                            (latest_video_id, latest_video_id, job["id"])
+                        )
                 stats = fetch_stats_batch([latest_video_id]).get(latest_video_id)
                 if stats:
                     safe_store(latest_video_id, stats)
@@ -1638,7 +1666,7 @@ def auto_track_scheduler_loop():
                 cur.execute(
                     "UPDATE video_list v SET is_tracking=FALSE "
                     "FROM auto_track_jobs j "
-                    "WHERE j.status='added' AND j.added_video_id=v.video_id "
+                    "WHERE j.added_video_id=v.video_id "
                     "AND j.processed_at + INTERVAL '30 hours' <= %s AND v.is_deleted=FALSE",
                     (now,)
                 )
@@ -3803,7 +3831,7 @@ def home():
         )
         videos = cur.fetchall()
         cur.execute(
-            "SELECT channel_input, channel_id, run_time_utc, status, added_video_id "
+            "SELECT id, channel_input, channel_id, run_time_utc, status, added_video_id, is_active "
             "FROM auto_track_jobs ORDER BY created_at DESC LIMIT 10"
         )
         auto_jobs = cur.fetchall()
@@ -4254,10 +4282,19 @@ def schedule_channel_track():
     conn = db()
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO auto_track_jobs (channel_id, channel_input, run_time_utc, created_by) VALUES (%s, %s, %s, %s)",
+            "INSERT INTO auto_track_jobs (channel_id, channel_input, run_time_utc, created_by, is_recurring, is_active) VALUES (%s, %s, %s, %s, TRUE, TRUE)",
             (channel_id, channel_input, run_time_utc, g.user.get("id"))
         )
     flash(f"Scheduled auto-track for channel {channel_id} at {local_dt.strftime('%Y-%m-%d %H:%M')} IST.", "success")
+    return redirect(url_for("home"))
+
+@app.post("/schedule_channel_track/<int:job_id>/stop")
+@login_required
+def stop_scheduled_channel_track(job_id: int):
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute("UPDATE auto_track_jobs SET is_active=FALSE, status='stopped', processed_at=NOW() WHERE id=%s", (job_id,))
+    flash("Auto-track schedule stopped.", "info")
     return redirect(url_for("home"))
 
 
