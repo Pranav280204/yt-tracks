@@ -1883,18 +1883,39 @@ def find_closest_day1_video_match(current_video_id: str, current_ts: Optional[da
         if since < 0 or since > window_end:
             continue
         series.setdefault(vid, []).append((since, int(r["views"])))
+    def interp_value(points: list[tuple[float, int]], target_sec: float):
+        if not points:
+            return None, None
+        if target_sec <= points[0][0]:
+            return points[0][1], abs(points[0][0] - target_sec)
+        if target_sec >= points[-1][0]:
+            return points[-1][1], abs(points[-1][0] - target_sec)
+        for i in range(1, len(points)):
+            t0, v0 = points[i - 1]
+            t1, v1 = points[i]
+            if t0 <= target_sec <= t1:
+                if t1 == t0:
+                    return v1, abs(t1 - target_sec)
+                ratio = (target_sec - t0) / (t1 - t0)
+                val = v0 + (v1 - v0) * ratio
+                nearest_gap = min(abs(t0 - target_sec), abs(t1 - target_sec))
+                return int(round(val)), nearest_gap
+        return None, None
+
     def hourly_points(points: list[tuple[float, int]]) -> dict[int, dict]:
         out = {}
         if len(points) < 2:
             return out
+        prev_end_views = None
         for h in range(1, 25):
             target = h * 3600
-            nearest = min(points, key=lambda p: abs(p[0] - target))
-            idx = points.index(nearest)
+            end_views, gap = interp_value(points, target)
             growth = None
-            if idx > 0:
-                growth = nearest[1] - points[idx - 1][1]
-            out[h] = {"views": nearest[1], "growth": growth, "gap": abs(nearest[0] - target)}
+            if end_views is not None and prev_end_views is not None:
+                growth = int(end_views - prev_end_views)
+            out[h] = {"views": end_views, "growth": growth, "gap": gap if gap is not None else 999999}
+            if end_views is not None:
+                prev_end_views = end_views
         return out
 
     current_points = series.get(current_video_id, [])
