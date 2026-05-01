@@ -254,7 +254,7 @@
           Latest jobs:
           {% for j in auto_jobs[:3] %}
             <div class="d-flex align-items-center justify-content-between gap-2">
-              <span>• {{ j.channel_id }} — {{ j.run_time_utc.astimezone().strftime('%Y-%m-%d %H:%M') }} ({{ j.status }}{% if not j.is_active %}, stopped{% endif %}){% if j.added_video_id %} → {{ j.added_video_id }}{% endif %}</span>
+              <span>• {{ j.channel_name or j.channel_id }} — {{ j.run_time_ist }} IST ({{ j.status }}{% if not j.is_active %}, stopped{% endif %}){% if j.added_video_id %} → {{ j.added_video_id }}{% endif %}</span>
               {% if j.is_active %}
                 <form method="POST" action="{{ url_for('stop_scheduled_channel_track', job_id=j.id) }}">
                   <button class="btn btn-sm btn-outline-warning" type="submit">Stop</button>
