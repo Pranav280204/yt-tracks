@@ -2087,8 +2087,9 @@ def find_closest_day1_video_match(
     if current_since_upload < 0:
         return None
 
-    # Build hourly matching on first 24 upload-relative hours.
-    window_end = 86400 + 600
+    # Build hourly matching using the maximum coverage available for the
+    # current video (not fixed to Day 1).
+    window_end = max(86400 + 600, int(current_since_upload) + 600)
     with conn.cursor() as cur:
         cur.execute(
             "SELECT video_id, ts_utc, views FROM views WHERE video_id = ANY(%s) ORDER BY video_id, ts_utc ASC",
@@ -2125,12 +2126,12 @@ def find_closest_day1_video_match(
                 return int(round(val)), nearest_gap
         return None, None
 
-    def hourly_points(points: list[tuple[float, int]]) -> dict[int, dict]:
+    def hourly_points(points: list[tuple[float, int]], max_hour: int) -> dict[int, dict]:
         out = {}
         if len(points) < 2:
             return out
         prev_end_views = None
-        for h in range(1, 25):
+        for h in range(1, max_hour + 1):
             target = h * 3600
             end_views, gap = interp_value(points, target)
             growth = None
@@ -2142,18 +2143,35 @@ def find_closest_day1_video_match(
         return out
 
     current_points = series.get(current_video_id, [])
-    current_hourly = hourly_points(current_points)
-    if not current_hourly:
+    if len(current_points) < 2:
         return None
+
+    # Dynamically cap overlap by whichever timeline has the least coverage.
+    # This avoids forcing fixed Day-1 style windows when either video is newer
+    # or has sparse data.
+    current_max_hour = max(0, int(current_since_upload // 3600))
+    if current_max_hour < 2:
+        return None
+
+    current_hourly = hourly_points(current_points, current_max_hour)
 
     best = None
     for hid in historical_ids:
-        hist_hourly = hourly_points(series.get(hid, []))
+        hist_points = series.get(hid, [])
+        if len(hist_points) < 2:
+            continue
+
+        hist_max_hour = max(0, int(hist_points[-1][0] // 3600))
+        hist_hourly = hourly_points(hist_points, hist_max_hour)
         if not hist_hourly:
             continue
+        pair_max_hour = min(current_max_hour, hist_max_hour)
+        if pair_max_hour < 2:
+            continue
+
         score = 0
         overlap = 0
-        for h in range(1, 25):
+        for h in range(1, pair_max_hour + 1):
             c = current_hourly.get(h)
             m = hist_hourly.get(h)
             if not c or not m:
@@ -2164,14 +2182,15 @@ def find_closest_day1_video_match(
             score += abs(c["views"] - m["views"])
             score += abs(c["growth"] - m["growth"]) * 2
             score += int((c["gap"] + m["gap"]) * 0.1)
-        # Allow early-day matching once at least 3 hourly windows overlap.
-        # Previously this required 6 windows, which made fresh videos show
-        # "No eligible historical match" for too long.
-        if overlap < 3:
+
+        # Dynamically require enough overlap relative to what is possible.
+        min_required_overlap = max(1, min(3, pair_max_hour - 1))
+        if overlap < min_required_overlap:
             continue
+
         score = int(score / overlap)
         if best is None or score < best["score"]:
-            best = {"video_id": hid, "score": score, "overlap": overlap, "hourly": hist_hourly}
+            best = {"video_id": hid, "score": score, "overlap": overlap, "hourly": hist_hourly, "pair_max_hour": pair_max_hour}
 
     if not best:
         return None
@@ -2181,7 +2200,8 @@ def find_closest_day1_video_match(
     matched_hr = []
     matched_hourly = best["hourly"]
     current_pub_ist = current_pub.astimezone(IST)
-    for h in range(1, 25):
+    max_display_hour = int(best.get("pair_max_hour", 24))
+    for h in range(1, max_display_hour + 1):
         c = current_hourly.get(h, {})
         m = matched_hourly.get(h, {})
         start_hr = (current_pub_ist.hour + (h - 1)) % 24
@@ -2196,7 +2216,7 @@ def find_closest_day1_video_match(
         "overlap_hours": best.get("overlap", 0),
         "hourly_comparison": [
             {"hour": h, "current": current_hr[h - 1], "matched": matched_hr[h - 1]}
-            for h in range(1, 25)
+            for h in range(1, max_display_hour + 1)
         ],
     }
 
