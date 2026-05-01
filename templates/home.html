@@ -75,6 +75,29 @@
       grid-template-columns:minmax(0, 1fr) auto;
       align-items:center;
     }
+    .auto-track-wrap{
+      margin-top:.25rem;
+      display:grid;
+      gap:.7rem;
+    }
+    .auto-track-head{
+      display:flex; align-items:center; justify-content:space-between; gap:.5rem;
+      padding:.7rem .85rem; border:1px solid rgba(255,255,255,.08); border-radius:.8rem;
+      background:linear-gradient(90deg, rgba(255,87,34,.16), rgba(255,193,7,.06));
+    }
+    .auto-track-jobs{display:grid; gap:.55rem;}
+    .job-card{
+      border:1px solid rgba(255,255,255,.08); border-radius:.8rem; padding:.62rem .72rem;
+      background:rgba(10,13,20,.7); display:flex; align-items:center; justify-content:space-between; gap:.55rem;
+      transition:transform .15s ease, border-color .15s ease;
+    }
+    .job-card:hover{transform:translateY(-1px); border-color:rgba(255,87,34,.4);}
+    .job-main{display:grid; gap:.2rem;}
+    .job-title{font-weight:600; color:#f4f7ff;}
+    .job-meta{font-size:.86rem; color:#aab5cb;}
+    .state-pill{font-size:.72rem; border-radius:999px; padding:.16rem .5rem; border:1px solid transparent;}
+    .state-pill.active{background:rgba(57,196,132,.15); color:#c5ffe3; border-color:rgba(57,196,132,.45);}
+    .state-pill.stopped{background:rgba(148,163,184,.18); color:#d9e2f2; border-color:rgba(148,163,184,.4);}
 
     .videos-wrap { padding: 1.25rem; }
     .videos-head { text-align:center; margin-bottom: 1.2rem; }
@@ -250,11 +273,24 @@
     <div class="toolbar-search">
       <span class="subtle small">Runs every day at the chosen IST time until manually stopped. Latest non-Short video is auto-added and auto-paused after 30 hours.</span>
       {% if auto_jobs %}
-        <div class="subtle small mt-1">
-          Latest jobs:
+        <div class="auto-track-wrap">
+          <div class="auto-track-head">
+            <div>
+              <div class="fw-semibold">📡 Live Auto-Track Queue</div>
+              <div class="subtle small">Latest jobs, refreshed on page load.</div>
+            </div>
+            <span class="badge text-bg-dark">{{ auto_jobs|length }} tracked</span>
+          </div>
+          <div class="auto-track-jobs">
           {% for j in auto_jobs[:3] %}
-            <div class="d-flex align-items-center justify-content-between gap-2">
-              <span>• {{ j.channel_name or j.channel_id }} — {{ j.run_time_ist }} IST ({{ j.status }}{% if not j.is_active %}, stopped{% endif %}){% if j.added_video_id %} → {{ j.added_video_id }}{% endif %}</span>
+            <div class="job-card">
+              <div class="job-main">
+                <div class="job-title">{{ j.channel_name or j.channel_id }}</div>
+                <div class="job-meta">{{ j.run_time_ist }} IST · {{ j.status|replace('_', ' ')|title }}{% if j.added_video_id %} · Added: {{ j.added_video_id }}{% endif %}</div>
+                <div>
+                  <span class="state-pill {{ 'active' if j.is_active else 'stopped' }}">{{ 'Active' if j.is_active else 'Stopped' }}</span>
+                </div>
+              </div>
               {% if j.is_active %}
                 <form method="POST" action="{{ url_for('stop_scheduled_channel_track', job_id=j.id) }}">
                   <button class="btn btn-sm btn-outline-warning" type="submit">Stop</button>
@@ -262,6 +298,7 @@
               {% endif %}
             </div>
           {% endfor %}
+          </div>
         </div>
       {% endif %}
     </div>
