@@ -296,34 +296,8 @@
           <strong>Closest Historical Match</strong>
           <a class="btn btn-sm btn-outline-warning" href="{{ url_for('video_velocity_vault', video_id=v.video_id, exclude_weekends='1' if v.exclude_weekends else None) }}">Open Vault</a>
         </div>
-        {% if v.day1_match %}
-          <div class="small-note mb-2">
-            Match video: <span class="mono">{{ v.day1_match.matched_video_id }}</span>
-            <span class="ms-2">Overlap: {{ v.day1_match.overlap_hours }}h</span>
-          </div>
-          <div class="table-responsive">
-            <table class="table table-sm align-middle mb-0">
-              <thead>
-                <tr>
-                  <th>Hour</th>
-                  <th>Current Growth</th>
-                  <th>Match Growth</th>
-                </tr>
-              </thead>
-              <tbody>
-                {% for row in v.day1_match.hourly_comparison[:5] %}
-                <tr>
-                  <td>{{ row.current.label }}</td>
-                  <td>{% if row.current.growth is not none %}{{ "{:,}".format(row.current.growth) }}{% else %}—{% endif %}</td>
-                  <td>{% if row.matched.growth is not none %}{{ "{:,}".format(row.matched.growth) }}{% else %}—{% endif %}</td>
-                </tr>
-                {% endfor %}
-              </tbody>
-            </table>
-          </div>
-        {% else %}
-          <div class="small-note mb-0">No eligible historical match found yet.</div>
-        {% endif %}
+        <button id="findClosestMatchBtn" type="button" class="btn btn-sm btn-outline-warning mb-2">Find Match</button>
+        <div id="closestMatchResult" class="small-note mb-0">Click <strong>Find Match</strong> to run realtime comparison.</div>
       </div>
       <!-- Targets compact card (removed "Manage" link as requested) -->
       <div class="card p-3">
@@ -698,6 +672,40 @@
       if (document.visibilityState === 'visible') pollLiveCounter();
     }, LIVE_POLL_MS);
     if (!isDeleted) pollLiveCounter();
+
+    const findBtn = document.getElementById('findClosestMatchBtn');
+    const resultBox = document.getElementById('closestMatchResult');
+    if (findBtn && resultBox) {
+      findBtn.addEventListener('click', async () => {
+        findBtn.disabled = true;
+        findBtn.textContent = 'Finding...';
+        resultBox.innerHTML = 'Fetching latest view data and comparing with historical videos...';
+        try {
+          const res = await fetch(`{{ url_for('find_closest_match_on_demand', video_id=v.video_id, exclude_weekends='1' if v.exclude_weekends else None) }}`, {
+            method: 'POST',
+            credentials: 'same-origin',
+            cache: 'no-store',
+            headers: { 'Accept': 'application/json' }
+          });
+          const j = await res.json();
+          if (!res.ok) throw new Error(j.error || 'match lookup failed');
+          if (!j.match) {
+            resultBox.textContent = 'No eligible historical match found yet.';
+            return;
+          }
+          const m = j.match;
+          resultBox.innerHTML = `
+            <div class="mb-1">Matched video: <span class="mono">${m.matched_video_id || '—'}</span> <span class="ms-2">Overlap: ${m.overlap_hours ?? '—'}h</span></div>
+            <a class="btn btn-sm btn-outline-primary" href="${j.tracking_link || '#'}">Open Tracking Link</a>
+          `;
+        } catch (err) {
+          resultBox.textContent = `Unable to find match right now: ${err.message}`;
+        } finally {
+          findBtn.disabled = false;
+          findBtn.textContent = 'Find Match';
+        }
+      });
+    }
 
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') {

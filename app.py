@@ -1952,13 +1952,6 @@ def build_video_display(vid: str, exclude_weekends: bool = False):
 
     compare_meta = None
 
-    day1_match = find_closest_day1_video_match(
-        vid,
-        latest_ts,
-        latest_views,
-        exclude_weekends=exclude_weekends
-    )
-
     result = {
         "video_id": vrow["video_id"],
         "name": vrow["name"],
@@ -1975,7 +1968,7 @@ def build_video_display(vid: str, exclude_weekends: bool = False):
         "thumbnail_prev_url": vrow.get("thumbnail_prev_url"),
         "thumbnail_changed": bool(vrow.get("thumbnail_changed")),
         "thumbnail_changed_at": vrow.get("thumbnail_changed_at"),
-        "day1_match": day1_match,
+        "day1_match": None,
         "exclude_weekends": bool(exclude_weekends),
     }
 
@@ -4120,6 +4113,52 @@ def video_velocity_vault(video_id):
         flash("Video not found.", "warning")
         return redirect(url_for("home"))
     return render_template("velocity_vault.html", v=info)
+
+@app.post("/video/<video_id>/closest-match")
+@login_required
+def find_closest_match_on_demand(video_id):
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT is_deleted FROM video_list WHERE video_id=%s",
+            (video_id,)
+        )
+        row = cur.fetchone()
+    if not row:
+        return jsonify({"error": "not found"}), 404
+    if bool(row.get("is_deleted")):
+        return jsonify({"error": "video deleted"}), 400
+
+    # Realtime refresh of latest views before matching.
+    stats = fetch_stats_batch([video_id]).get(video_id)
+    if stats:
+        safe_store(video_id, stats)
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT ts_utc, views FROM views WHERE video_id=%s ORDER BY ts_utc DESC LIMIT 1",
+            (video_id,)
+        )
+        latest = cur.fetchone()
+    if not latest:
+        return jsonify({"error": "no view samples yet"}), 400
+
+    exclude_weekends = (request.args.get("exclude_weekends") == "1")
+    match = find_closest_day1_video_match(
+        video_id,
+        latest["ts_utc"],
+        latest["views"],
+        exclude_weekends=exclude_weekends
+    )
+    if not match:
+        return jsonify({"match": None})
+
+    matched_video_id = match.get("matched_video_id")
+    tracking_link = url_for("video_detail", video_id=matched_video_id) if matched_video_id else None
+    return jsonify({
+        "match": match,
+        "tracking_link": tracking_link
+    })
     
 @app.get("/video/<video_id>/json")
 @login_required
