@@ -82,7 +82,7 @@
             {% for u in users %}
               <tr>
                 <td>{{ u.id }}</td>
-                <td>{{ u.username }}</td>
+                <td>{{ u.username }} {% if u.is_admin %}<span class="badge bg-warning text-dark">Admin</span>{% endif %}</td>
                 <td>{% if u.is_active %}<span class="badge bg-success">Active</span>{% else %}<span class="badge bg-secondary">Inactive</span>{% endif %}</td>
                 <td>{% if u.is_logged_in %}<span class="badge bg-info text-dark">Yes</span>{% else %}<span class="badge bg-light text-muted">No</span>{% endif %}</td>
                 <td>{{ u.subscription_expiry_date or '-' }}</td>
@@ -122,6 +122,14 @@
                       <input type="hidden" name="user_id" value="{{ u.id }}">
                       <input type="date" name="expiry_date" required>
                       <button class="btn btn-sm btn-outline-warning" type="submit">Set Expiry</button>
+                    </form>
+                    <form method="POST" action="{{ url_for('admin_users') }}">
+                      <input type="hidden" name="action" value="toggle_admin">
+                      <input type="hidden" name="user_id" value="{{ u.id }}">
+                      <input type="hidden" name="make_admin" value="{{ 0 if u.is_admin else 1 }}">
+                      <button class="btn btn-sm {{ 'btn-outline-dark' if u.is_admin else 'btn-outline-warning' }}" type="submit">
+                        {{ 'Revoke Admin' if u.is_admin else 'Make Admin' }}
+                      </button>
                     </form>
                   </div>
                 </td>

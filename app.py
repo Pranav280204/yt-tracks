@@ -416,6 +416,10 @@ def init_db():
         """)
         cur.execute("""
         ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS is_admin BOOLEAN NOT NULL DEFAULT FALSE;
+        """)
+        cur.execute("""
+        ALTER TABLE users
         ADD COLUMN IF NOT EXISTS last_reminder_sent TEXT;
         """)
         cur.execute("""
@@ -597,7 +601,7 @@ def get_current_user():
     conn = db()
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, username, current_session_token, is_active, subscription_expiry_date, grace_period_end, payment_status, last_reminder_sent "
+            "SELECT id, username, current_session_token, is_active, is_admin, subscription_expiry_date, grace_period_end, payment_status, last_reminder_sent "
             "FROM users WHERE id=%s",
             (uid,)
         )
@@ -844,6 +848,25 @@ def fetch_channel_id_for_videos(video_ids: list[str]) -> dict:
     # ensure all original video_ids exist in output
     for vid in video_ids:
         out.setdefault(vid, None)
+    return out
+
+def fetch_channel_names(channel_ids: list[str]) -> dict[str, str]:
+    """Bulk fetch channel titles for channel IDs."""
+    out: dict[str, str] = {}
+    if not YOUTUBE or not channel_ids:
+        return out
+    unique_ids = [cid for cid in sorted(set(channel_ids)) if cid]
+    for i in range(0, len(unique_ids), 50):
+        chunk = unique_ids[i:i + 50]
+        try:
+            r = YOUTUBE.channels().list(part="snippet", id=",".join(chunk), maxResults=50).execute()
+            for it in r.get("items", []):
+                cid = it.get("id")
+                title = (it.get("snippet") or {}).get("title")
+                if cid and title:
+                    out[cid] = title
+        except Exception:
+            log.exception("fetch_channel_names error")
     return out
 
 # --- paste near other "sleep_until_next_..." and "current_half_hour_utc_from_ist" helpers ---
@@ -3802,6 +3825,12 @@ def admin_users():
                     cur.execute("UPDATE users SET payment_status='rejected' WHERE id=%s", (pr["user_id"],))
                     cur.execute("UPDATE payment_requests SET status='rejected', reviewed_at=NOW(), reviewed_by=%s, admin_note='Please resubmit payment details.' WHERE id=%s", (reviewer_id, req_id))
             flash("Payment rejected. User asked to resubmit.", "warning")
+        elif action == "toggle_admin":
+            user_id = int(request.form.get("user_id") or "0")
+            make_admin = (request.form.get("make_admin") == "1")
+            with conn.cursor() as cur:
+                cur.execute("UPDATE users SET is_admin=%s WHERE id=%s", (make_admin, user_id))
+            flash("Admin role updated.", "success")
 
         return redirect(url_for("admin_users"))
 
@@ -3818,6 +3847,7 @@ def admin_users():
               id,
               username,
               is_active,
+              is_admin,
               (current_session_token IS NOT NULL) AS is_logged_in,
               subscription_expiry_date,
               payment_status
@@ -3866,6 +3896,11 @@ def home():
             "FROM auto_track_jobs ORDER BY created_at DESC LIMIT 10"
         )
         auto_jobs = cur.fetchall()
+    auto_channel_names = fetch_channel_names([j.get("channel_id") for j in auto_jobs]) if auto_jobs else {}
+    for j in auto_jobs:
+        j["channel_name"] = auto_channel_names.get(j.get("channel_id"))
+        rt = j.get("run_time_utc")
+        j["run_time_ist"] = rt.astimezone(IST).strftime("%Y-%m-%d %H:%M") if rt else "-"
     t_db_videos = time.time()
 
     video_ids = [v["video_id"] for v in videos]
@@ -4368,6 +4403,9 @@ def schedule_channel_track():
 @app.post("/schedule_channel_track/<int:job_id>/stop")
 @login_required
 def stop_scheduled_channel_track(job_id: int):
+    if not g.user or not bool(g.user.get("is_admin")):
+        flash("Only admin-assigned users can stop scheduled tracking jobs.", "danger")
+        return redirect(url_for("home"))
     conn = db()
     with conn.cursor() as cur:
         cur.execute("UPDATE auto_track_jobs SET is_active=FALSE, status='stopped', processed_at=NOW() WHERE id=%s", (job_id,))
