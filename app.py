@@ -1848,7 +1848,9 @@ def find_closest_day1_video_match(current_video_id: str, current_ts: Optional[da
         return None
     conn = db()
     with conn.cursor() as cur:
-        cur.execute("SELECT video_id FROM video_list WHERE video_id<>%s AND is_deleted=FALSE", (current_video_id,))
+        # Consider all historical videos (tracking, non-tracking, and soft-deleted)
+        # so comparison is not restricted to active tracking items only.
+        cur.execute("SELECT video_id FROM video_list WHERE video_id<>%s", (current_video_id,))
         historical_ids = [r["video_id"] for r in cur.fetchall()]
     if not historical_ids:
         return None
