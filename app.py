@@ -423,6 +423,10 @@ def init_db():
         ADD COLUMN IF NOT EXISTS last_reminder_sent TEXT;
         """)
         cur.execute("""
+        ALTER TABLE users
+        ADD COLUMN IF NOT EXISTS closest_intro_seen BOOLEAN NOT NULL DEFAULT FALSE;
+        """)
+        cur.execute("""
         CREATE TABLE IF NOT EXISTS payment_requests (
           id SERIAL PRIMARY KEY,
           user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -601,7 +605,7 @@ def get_current_user():
     conn = db()
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT id, username, current_session_token, is_active, is_admin, subscription_expiry_date, grace_period_end, payment_status, last_reminder_sent "
+            "SELECT id, username, current_session_token, is_active, is_admin, closest_intro_seen, subscription_expiry_date, grace_period_end, payment_status, last_reminder_sent "
             "FROM users WHERE id=%s",
             (uid,)
         )
@@ -4130,6 +4134,11 @@ def video_detail(video_id):
     info["thumbnail_changed_at"] = info.get("thumbnail_changed_at")
     info["thumbnail_prev_url"] = info.get("thumbnail_prev_url")
     info["pooling_interval"] = POOLING_INTERVAL
+    info["show_closest_intro_card"] = bool(g.user and not g.user.get("closest_intro_seen"))
+    if info["show_closest_intro_card"] and g.user:
+        with db().cursor() as cur:
+            cur.execute("UPDATE users SET closest_intro_seen=TRUE WHERE id=%s", (g.user["id"],))
+        g.user["closest_intro_seen"] = True
 
     return render_template("video_detail.html", v=info)
 
@@ -4154,15 +4163,10 @@ def velocity_vault_intro(video_id):
 @login_required
 def velocity_vault_intro_ack(video_id):
     exclude_weekends = request.form.get("exclude_weekends") == "1"
-    response = make_response(redirect(url_for("video_velocity_vault", video_id=video_id, exclude_weekends="1" if exclude_weekends else None)))
-    response.set_cookie(
-        f"vault_intro_seen_{video_id}",
-        "1",
-        max_age=60 * 60 * 24 * 365,
-        httponly=True,
-        samesite="Lax"
-    )
-    return response
+    if g.user:
+        with db().cursor() as cur:
+            cur.execute("UPDATE users SET closest_intro_seen=TRUE WHERE id=%s", (g.user["id"],))
+    return redirect(url_for("video_velocity_vault", video_id=video_id, exclude_weekends="1" if exclude_weekends else None))
 
 @app.get("/video/<video_id>/velocity-vault")
 @login_required
@@ -4171,9 +4175,6 @@ def video_velocity_vault(video_id):
     Dedicated page for Day-1 closest historical comparison aligned by time since upload.
     """
     exclude_weekends = request.args.get("exclude_weekends") == "1"
-    if request.cookies.get(f"vault_intro_seen_{video_id}") != "1":
-        return redirect(url_for("velocity_vault_intro", video_id=video_id, exclude_weekends="1" if exclude_weekends else None))
-
     info = build_video_display(video_id, exclude_weekends=exclude_weekends, include_day1_match=True)
     if info is None:
         flash("Video not found.", "warning")

@@ -177,6 +177,14 @@
       color:#ecf0ff;
     }
     .small-note, .live-sub, .stat-sub, .text-muted { color:#9ba6bf !important; }
+    .closest-intro-card{
+      background:linear-gradient(135deg, rgba(255,193,7,.18), rgba(255,87,34,.16));
+      border:1px solid rgba(255,193,7,.45);
+      color:#ffffff;
+      border-radius:14px;
+      box-shadow:0 10px 30px rgba(0,0,0,.25);
+    }
+    .closest-intro-card .intro-muted{color:#f3f6ff; opacity:.92;}
     .table { --bs-table-bg: transparent; --bs-table-color:#ecf0ff; --bs-table-border-color:#2a2f3a; }
     .table-card .table thead th { background:rgba(255,87,34,.12); color:#ffd7ca; border-bottom:1px solid #2a2f3a; }
     .table-card .table tbody tr:nth-child(odd), .table-card .table tbody tr:nth-child(even) { background:transparent; }
@@ -211,6 +219,26 @@
       {% endif %}
     </div>
   </div>
+
+  {% if v.show_closest_intro_card %}
+    <div class="closest-intro-card p-3 p-md-4 mb-3">
+      <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+        <h5 class="mb-0">🚀 New: Closest Historical Match</h5>
+        <span class="badge text-bg-dark">Shown once per user</span>
+      </div>
+      <p class="intro-muted mb-2">
+        Compare this video with a historically similar one based on early momentum and growth pattern.
+      </p>
+      <ul class="mb-3 intro-muted">
+        <li>See matched video and overlap quickly.</li>
+        <li>Preview hourly comparison from the details panel.</li>
+        <li>Open Velocity Vault for full hour-by-hour breakdown.</li>
+      </ul>
+      <div class="d-flex gap-2 flex-wrap">
+        <a class="btn btn-sm btn-light" href="{{ url_for('video_velocity_vault', video_id=v.video_id, exclude_weekends='1' if v.exclude_weekends else None) }}">Open Velocity Vault</a>
+      </div>
+    </div>
+  {% endif %}
 
   <div class="video-hero mb-3">
     <div class="thumb-wrap">
