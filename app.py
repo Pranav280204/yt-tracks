@@ -2126,12 +2126,12 @@ def find_closest_day1_video_match(
                 return int(round(val)), nearest_gap
         return None, None
 
-    def hourly_points(points: list[tuple[float, int]], max_hour: int) -> dict[int, dict]:
+    def hourly_points(points: list[tuple[float, int]], max_hour: int = 24) -> dict[int, dict]:
         out = {}
         if len(points) < 2:
             return out
         prev_end_views = None
-        for h in range(1, max_hour + 1):
+        for h in range(1, max(1, min(24, max_hour)) + 1):
             target = h * 3600
             end_views, gap = interp_value(points, target)
             growth = None
@@ -2143,7 +2143,8 @@ def find_closest_day1_video_match(
         return out
 
     current_points = series.get(current_video_id, [])
-    if len(current_points) < 2:
+    current_hourly = hourly_points(current_points, max_hour=24)
+    if not current_hourly:
         return None
 
     # Dynamically cap overlap by each series' observed coverage.
@@ -2154,7 +2155,7 @@ def find_closest_day1_video_match(
     best = None
     for hid in historical_ids:
         hist_points = series.get(hid, [])
-        hist_hourly = hourly_points(hist_points)
+        hist_hourly = hourly_points(hist_points, max_hour=24)
         if not hist_hourly or not hist_points:
             continue
 
