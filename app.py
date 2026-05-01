@@ -3858,6 +3858,19 @@ def video_detail(video_id):
     info["pooling_interval"] = POOLING_INTERVAL
 
     return render_template("video_detail.html", v=info)
+
+
+@app.get("/video/<video_id>/velocity-vault")
+@login_required
+def video_velocity_vault(video_id):
+    """
+    Dedicated page for Day-1 closest historical comparison aligned by time since upload.
+    """
+    info = build_video_display(video_id)
+    if info is None:
+        flash("Video not found.", "warning")
+        return redirect(url_for("home"))
+    return render_template("velocity_vault.html", v=info)
     
 @app.get("/video/<video_id>/json")
 @login_required
