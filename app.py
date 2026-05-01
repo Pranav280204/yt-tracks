@@ -1955,12 +1955,28 @@ def build_video_display(vid: str, exclude_weekends: bool = False, include_day1_m
 
     compare_meta = None
 
+    match_latest_ts = latest_ts
+    match_latest_views = latest_views
+    if include_day1_match and (match_latest_ts is None or match_latest_views is None):
+        # Fall back to absolute latest sample (without display-window limits) so
+        # Velocity Vault can still compute matches even if table rendering window
+        # has no rows for this video.
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT ts_utc, views FROM views WHERE video_id=%s ORDER BY ts_utc DESC LIMIT 1",
+                (vid,)
+            )
+            latest_row = cur.fetchone()
+            if latest_row:
+                match_latest_ts = latest_row.get("ts_utc")
+                match_latest_views = latest_row.get("views")
+
     day1_match = None
     if include_day1_match:
         day1_match = find_closest_day1_video_match(
             vid,
-            latest_ts,
-            latest_views,
+            match_latest_ts,
+            match_latest_views,
             exclude_weekends=exclude_weekends
         )
 
