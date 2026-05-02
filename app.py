@@ -2171,7 +2171,7 @@ def find_closest_day1_video_match(
         if pair_max_hour < 2:
             continue
 
-        score = 0
+        score = 0.0
         overlap = 0
         for h in range(1, pair_max_hour + 1):
             c = current_hourly.get(h)
@@ -2181,8 +2181,20 @@ def find_closest_day1_video_match(
             if c["growth"] is None or m["growth"] is None:
                 continue
             overlap += 1
-            score += abs(c["views"] - m["views"])
-            score += abs(c["growth"] - m["growth"]) * 2
+            # View similarity: compare relative distance, not only raw absolute gap.
+            # This keeps matching meaningful across videos with different scales.
+            c_views = c["views"] if c["views"] is not None else 0
+            m_views = m["views"] if m["views"] is not None else 0
+            view_similarity_penalty = abs(c_views - m_views) / max(1, max(c_views, m_views))
+
+            # Growth comparison: keep as strong signal, normalized to hour scale.
+            c_growth = c["growth"] if c["growth"] is not None else 0
+            m_growth = m["growth"] if m["growth"] is not None else 0
+            growth_similarity_penalty = abs(c_growth - m_growth) / max(1, max(abs(c_growth), abs(m_growth)))
+
+            # Combine normalized similarity terms (0..1+) into a stable score.
+            score += (view_similarity_penalty * 1000)
+            score += (growth_similarity_penalty * 2000)
             score += int((c["gap"] + m["gap"]) * 0.1)
 
         min_required_overlap = max(1, min(3, hist_max_hour - 1))
