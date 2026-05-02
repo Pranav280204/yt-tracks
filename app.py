@@ -2110,10 +2110,10 @@ def find_closest_day1_video_match(
     def interp_value(points: list[tuple[float, int]], target_sec: float):
         if not points:
             return None, None
-        if target_sec <= points[0][0]:
-            return points[0][1], abs(points[0][0] - target_sec)
-        if target_sec >= points[-1][0]:
-            return points[-1][1], abs(points[-1][0] - target_sec)
+        # Do not extrapolate outside sampled range; this avoids comparing
+        # early-hour current data with a historical video's end-state value.
+        if target_sec < points[0][0] or target_sec > points[-1][0]:
+            return None, None
         for i in range(1, len(points)):
             t0, v0 = points[i - 1]
             t1, v1 = points[i]
@@ -2147,9 +2147,8 @@ def find_closest_day1_video_match(
     if not current_hourly:
         return None
 
-    # Use matched-video coverage as the overlap horizon.
-    # Current series can still contribute beyond its last sample via interpolation
-    # against its most recent point, but match eligibility is driven by matched data.
+    # Use matched-video coverage as the overlap horizon while only scoring
+    # hours where sampled timelines can provide aligned hourly values.
 
     best = None
     for hid in historical_ids:
