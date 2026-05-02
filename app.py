@@ -1735,7 +1735,7 @@ def start_background():
 # -----------------------------
 # Helper: build display data for one video
 # -----------------------------
-def build_video_display(vid: str, exclude_weekends: bool = False, include_day1_match: bool = False):
+def build_video_display(vid: str, exclude_weekends: bool = False, include_day1_match: bool = False, match_weekday: Optional[int] = None):
     """
     Build display data for a video:
      - fetches only recent rows (bounded window)
@@ -1749,7 +1749,7 @@ def build_video_display(vid: str, exclude_weekends: bool = False, include_day1_m
     nowu = now_utc()
 
     # try short in-memory cache
-    cache_key = f"{vid}|ew={1 if exclude_weekends else 0}|d1={1 if include_day1_match else 0}"
+    cache_key = f"{vid}|ew={1 if exclude_weekends else 0}|d1={1 if include_day1_match else 0}|mw={match_weekday if match_weekday is not None else -1}"
     with _video_display_cache_lock:
         ent = _video_display_cache.get(cache_key)
         if ent:
@@ -2004,7 +2004,8 @@ def build_video_display(vid: str, exclude_weekends: bool = False, include_day1_m
             vid,
             match_latest_ts,
             match_latest_views,
-            exclude_weekends=exclude_weekends
+            exclude_weekends=exclude_weekends,
+            match_weekday=match_weekday
         )
 
     result = {
@@ -2058,7 +2059,8 @@ def find_closest_day1_video_match(
     current_video_id: str,
     current_ts: Optional[datetime],
     current_views: Optional[int],
-    exclude_weekends: bool = False
+    exclude_weekends: bool = False,
+    match_weekday: Optional[int] = None
 ):
     if not current_ts or current_views is None:
         return None
@@ -2080,6 +2082,13 @@ def find_closest_day1_video_match(
         historical_ids = [
             hid for hid in historical_ids
             if published_map.get(hid) and published_map[hid].weekday() not in {5, 6}
+        ]
+        if not historical_ids:
+            return None
+    if match_weekday is not None:
+        historical_ids = [
+            hid for hid in historical_ids
+            if published_map.get(hid) and published_map[hid].weekday() == int(match_weekday)
         ]
         if not historical_ids:
             return None
@@ -4152,6 +4161,29 @@ def video_detail(video_id):
             cur.execute("UPDATE users SET closest_intro_seen=TRUE WHERE id=%s", (g.user["id"],))
         g.user["closest_intro_seen"] = True
 
+    # Current-time context rows: past 3h and next 3h on latest IST date.
+    info["context_rows"] = []
+    try:
+        daily = info.get("daily") or {}
+        if daily:
+            latest_date = sorted(daily.keys(), reverse=True)[0]
+            rows = daily.get(latest_date) or []
+            now_ist = now_utc().astimezone(IST)
+            center_hour = now_ist.hour
+            for row in rows:
+                ts = row[0] if row and len(row) > 0 else None
+                if not ts:
+                    continue
+                try:
+                    hr = datetime.fromisoformat(ts).hour
+                except Exception:
+                    continue
+                if (center_hour - 3) <= hr <= (center_hour + 3):
+                    info["context_rows"].append(row)
+            info["context_rows"] = info["context_rows"][:8]
+    except Exception:
+        info["context_rows"] = []
+
     return render_template("video_detail.html", v=info)
 
 
@@ -4187,7 +4219,11 @@ def video_velocity_vault(video_id):
     Dedicated page for Day-1 closest historical comparison aligned by time since upload.
     """
     exclude_weekends = request.args.get("exclude_weekends") == "1"
-    info = build_video_display(video_id, exclude_weekends=exclude_weekends, include_day1_match=True)
+    match_weekday = 5 if request.args.get("match_only_saturday") == "1" else (6 if request.args.get("match_only_sunday") == "1" else None)
+    info = build_video_display(video_id, exclude_weekends=exclude_weekends, include_day1_match=True, match_weekday=match_weekday)
+    if info is not None:
+        info["match_only_saturday"] = (match_weekday == 5)
+        info["match_only_sunday"] = (match_weekday == 6)
     if info is None:
         flash("Video not found.", "warning")
         return redirect(url_for("home"))
@@ -4223,11 +4259,13 @@ def find_closest_match_on_demand(video_id):
         return jsonify({"error": "no view samples yet"}), 400
 
     exclude_weekends = (request.args.get("exclude_weekends") == "1")
+    match_weekday = 5 if request.args.get("match_only_saturday") == "1" else (6 if request.args.get("match_only_sunday") == "1" else None)
     match = find_closest_day1_video_match(
         video_id,
         latest["ts_utc"],
         latest["views"],
-        exclude_weekends=exclude_weekends
+        exclude_weekends=exclude_weekends,
+        match_weekday=match_weekday
     )
     if not match:
         return jsonify({"match": None})
