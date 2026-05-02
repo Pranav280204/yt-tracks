@@ -2177,10 +2177,8 @@ def find_closest_day1_video_match(
             score += abs(c["views"] - m["views"])
             score += abs(c["growth"] - m["growth"]) * 2
             score += int((c["gap"] + m["gap"]) * 0.1)
-
-        # Dynamically require enough overlap relative to what is possible.
-        min_required_overlap = max(1, min(3, pair_max_hour - 1))
-        if overlap < min_required_overlap:
+        # Keep original day-1 overlap threshold behavior.
+        if overlap < 3:
             continue
 
         score = int(score / overlap)
