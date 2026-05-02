@@ -2164,11 +2164,10 @@ def find_closest_day1_video_match(
             score += abs(c["views"] - m["views"])
             score += abs(c["growth"] - m["growth"]) * 2
             score += int((c["gap"] + m["gap"]) * 0.1)
-        # Allow early-day matching once at least 3 hourly windows overlap.
-        # Previously this required 6 windows, which made fresh videos show
-        # "No eligible historical match" for too long.
+        # Keep original day-1 overlap threshold behavior.
         if overlap < 3:
             continue
+
         score = int(score / overlap)
         if best is None or score < best["score"]:
             best = {"video_id": hid, "score": score, "overlap": overlap, "hourly": hist_hourly}
