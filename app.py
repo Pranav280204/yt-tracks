@@ -2147,8 +2147,9 @@ def find_closest_day1_video_match(
     if not current_hourly:
         return None
 
-    # Use dynamic overlap based on available sampled coverage.
-    current_data_max_hour = min(24, max(0, int(current_points[-1][0] // 3600))) if current_points else 0
+    # Use matched-video coverage as the overlap horizon.
+    # Current series can still contribute beyond its last sample via interpolation
+    # against its most recent point, but match eligibility is driven by matched data.
 
     best = None
     for hid in historical_ids:
@@ -2158,7 +2159,7 @@ def find_closest_day1_video_match(
             continue
 
         hist_max_hour = min(24, max(0, int(hist_points[-1][0] // 3600)))
-        pair_max_hour = min(current_data_max_hour, hist_max_hour)
+        pair_max_hour = hist_max_hour
         if pair_max_hour < 2:
             continue
 
@@ -2176,7 +2177,7 @@ def find_closest_day1_video_match(
             score += abs(c["growth"] - m["growth"]) * 2
             score += int((c["gap"] + m["gap"]) * 0.1)
 
-        min_required_overlap = max(1, min(3, pair_max_hour - 1))
+        min_required_overlap = max(1, min(3, hist_max_hour - 1))
         if overlap < min_required_overlap:
             continue
 
