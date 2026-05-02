@@ -39,6 +39,14 @@
       <input class="form-check-input" type="checkbox" id="excludeWeekendsToggle" name="exclude_weekends" value="1" {% if v.exclude_weekends %}checked{% endif %} onchange="this.form.submit()">
       <label class="form-check-label" for="excludeWeekendsToggle">Exclude Saturday and Sunday while finding closest match</label>
     </div>
+    <div class="form-check form-switch">
+      <input class="form-check-input" type="checkbox" id="matchSaturdayToggle" name="match_only_saturday" value="1" {% if v.match_only_saturday %}checked{% endif %} onchange="if(this.checked){document.getElementById('matchSundayToggle').checked=false;} this.form.submit()">
+      <label class="form-check-label" for="matchSaturdayToggle">Match only Saturdays</label>
+    </div>
+    <div class="form-check form-switch">
+      <input class="form-check-input" type="checkbox" id="matchSundayToggle" name="match_only_sunday" value="1" {% if v.match_only_sunday %}checked{% endif %} onchange="if(this.checked){document.getElementById('matchSaturdayToggle').checked=false;} this.form.submit()">
+      <label class="form-check-label" for="matchSundayToggle">Match only Sundays</label>
+    </div>
   </form>
 
   <div class="card bg-black border-secondary closest-match-card">
