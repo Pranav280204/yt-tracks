@@ -223,19 +223,19 @@
   {% if v.show_closest_intro_card %}
     <div class="closest-intro-card p-3 p-md-4 mb-3">
       <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
-        <h5 class="mb-0">🚀 New: Closest Historical Match</h5>
+        <h5 class="mb-0">🚀 New: Most Similar Video</h5>
         <span class="badge text-bg-dark">Shown once per user</span>
       </div>
       <p class="intro-muted mb-2">
-        Compare this video with a historically similar one based on early momentum and growth pattern.
+        Compare this video with one that grew in a very similar way after upload.
       </p>
       <ul class="mb-3 intro-muted">
-        <li>See matched video and overlap quickly.</li>
-        <li>Preview hourly comparison from the details panel.</li>
-        <li>Open Velocity Vault for full hour-by-hour breakdown.</li>
+        <li>See your video and the similar one side by side.</li>
+        <li>Quickly compare how views grew over time.</li>
+        <li>Open View Performance Comparison for the full breakdown.</li>
       </ul>
       <div class="d-flex gap-2 flex-wrap">
-        <a class="btn btn-sm btn-light" href="{{ url_for('video_velocity_vault', video_id=v.video_id, exclude_weekends='1' if v.exclude_weekends else None) }}">Open Velocity Vault</a>
+        <a class="btn btn-sm btn-light" href="{{ url_for('video_velocity_vault', video_id=v.video_id, exclude_weekends='1' if v.exclude_weekends else None) }}">View Most Similar Video</a>
       </div>
     </div>
   {% endif %}
@@ -311,21 +311,18 @@
 
         <hr class="my-2">
 
-        <div class="small-note mb-2">Quick actions</div>
         <div class="d-grid gap-2">
           <a class="btn btn-sm btn-outline-primary" href="{{ url_for('video_stats', video_id=v.video_id) }}">More stats</a>
-          <a class="btn btn-sm btn-outline-warning" href="{{ url_for('video_velocity_vault', video_id=v.video_id, exclude_weekends='1' if v.exclude_weekends else None) }}">Find Closest Match</a>
         </div>
       </div>
 
 
       <div class="card p-3 mt-3">
         <div class="d-flex justify-content-between align-items-center mb-2">
-          <strong>Closest Historical Match</strong>
-          <a class="btn btn-sm btn-outline-warning" href="{{ url_for('video_velocity_vault', video_id=v.video_id, exclude_weekends='1' if v.exclude_weekends else None) }}">Open Vault</a>
+          <strong>Most Similar Video</strong>
         </div>
-        <button id="findClosestMatchBtn" type="button" class="btn btn-sm btn-outline-warning mb-2">Find Match</button>
-        <div id="closestMatchResult" class="small-note mb-0">Click <strong>Find Match</strong> to run realtime comparison.</div>
+        <div id="closestMatchResult" class="small-note mb-2">This video performed most like yours at the same time after upload.</div>
+        <a class="btn btn-sm btn-outline-warning" href="{{ url_for('video_velocity_vault', video_id=v.video_id, exclude_weekends='1' if v.exclude_weekends else None) }}">View Most Similar Video</a>
       </div>
       <!-- Targets compact card (removed "Manage" link as requested) -->
       <div class="card p-3">
@@ -701,40 +698,6 @@
       if (document.visibilityState === 'visible') pollLiveCounter();
     }, LIVE_POLL_MS);
     if (!isDeleted) pollLiveCounter();
-
-    const findBtn = document.getElementById('findClosestMatchBtn');
-    const resultBox = document.getElementById('closestMatchResult');
-    if (findBtn && resultBox) {
-      findBtn.addEventListener('click', async () => {
-        findBtn.disabled = true;
-        findBtn.textContent = 'Finding...';
-        resultBox.innerHTML = 'Fetching latest view data and comparing with historical videos...';
-        try {
-          const res = await fetch(`{{ url_for('find_closest_match_on_demand', video_id=v.video_id, exclude_weekends='1' if v.exclude_weekends else None) }}`, {
-            method: 'POST',
-            credentials: 'same-origin',
-            cache: 'no-store',
-            headers: { 'Accept': 'application/json' }
-          });
-          const j = await res.json();
-          if (!res.ok) throw new Error(j.error || 'match lookup failed');
-          if (!j.match) {
-            resultBox.textContent = 'No eligible historical match found yet.';
-            return;
-          }
-          const m = j.match;
-          resultBox.innerHTML = `
-            <div class="mb-1">Matched video: <span class="mono">${m.matched_video_id || '—'}</span> <span class="ms-2">Overlap: ${m.overlap_hours ?? '—'}h</span></div>
-            <a class="btn btn-sm btn-outline-primary" href="${j.tracking_link || '#'}">Open Tracking Link</a>
-          `;
-        } catch (err) {
-          resultBox.textContent = `Unable to find match right now: ${err.message}`;
-        } finally {
-          findBtn.disabled = false;
-          findBtn.textContent = 'Find Match';
-        }
-      });
-    }
 
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden') {

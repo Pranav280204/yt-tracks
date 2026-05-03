@@ -2209,6 +2209,16 @@ def find_closest_day1_video_match(
         return None
 
     matched_id = best["video_id"]
+    matched_meta = {"name": None, "thumbnail_url": None}
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT name, thumbnail_url FROM video_list WHERE video_id=%s LIMIT 1",
+            (matched_id,)
+        )
+        mm = cur.fetchone()
+        if mm:
+            matched_meta["name"] = mm.get("name")
+            matched_meta["thumbnail_url"] = mm.get("thumbnail_url")
     current_hr = []
     matched_hr = []
     matched_hourly = best["hourly"]
@@ -2225,6 +2235,8 @@ def find_closest_day1_video_match(
 
     return {
         "matched_video_id": matched_id,
+        "matched_video_name": matched_meta.get("name"),
+        "matched_thumbnail_url": matched_meta.get("thumbnail_url"),
         "current_since_upload_sec": int(current_since_upload),
         "overlap_hours": best.get("overlap", 0),
         "hourly_comparison": [
