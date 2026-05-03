@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>New: Closest Match</title>
+  <title>New: Most Similar Video</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
     .intro-text{color:#f5f7ff !important;}
@@ -14,10 +14,10 @@
   <div class="container py-5" style="max-width: 820px;">
     <div class="card bg-black border-secondary shadow-lg">
       <div class="card-body p-4 p-md-5">
-        <h1 class="h3 mb-3">Introducing Closest Historical Match</h1>
+        <h1 class="h3 mb-3">Introducing Most Similar Video</h1>
         <p class="intro-text mb-4">
-          You can now see a quick closest-match snapshot right on the video detail page,
-          and open the full Velocity Vault for deeper hour-by-hour comparison.
+          You can now compare your video with one that grew similarly,
+          then open View Performance Comparison for a clear side-by-side view.
         </p>
 
         <div class="row g-3 align-items-center mb-4">
@@ -32,15 +32,15 @@
         </div>
 
         <ul class="mb-4">
-          <li>Review matched video ID and overlap hours instantly.</li>
-          <li>Preview first 5 hourly growth rows without leaving details.</li>
-          <li>Jump to Velocity Vault anytime for full comparison.</li>
+          <li>See your video and the similar one quickly.</li>
+          <li>Compare growth in a simple side-by-side layout.</li>
+          <li>Open View Performance Comparison anytime.</li>
         </ul>
 
         <div class="d-flex gap-2 flex-wrap">
           <form method="post" action="{{ url_for('velocity_vault_intro_ack', video_id=v.video_id) }}">
             <input type="hidden" name="exclude_weekends" value="{{ '1' if v.exclude_weekends else '0' }}">
-            <button type="submit" class="btn btn-warning">Continue to Velocity Vault</button>
+            <button type="submit" class="btn btn-warning">Continue to View Performance Comparison</button>
           </form>
           <a href="{{ url_for('video_detail', video_id=v.video_id) }}" class="btn btn-outline-light">Back to Video</a>
         </div>
