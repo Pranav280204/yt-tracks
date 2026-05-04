@@ -2163,11 +2163,14 @@ def find_closest_day1_video_match(
     best = None
     for hid in historical_ids:
         hist_points = series.get(hid, [])
-        hist_hourly = hourly_points(hist_points)
-        if not hist_hourly or not hist_points:
+        if not hist_points:
             continue
 
         hist_max_hour = max(0, int(hist_points[-1][0] // 3600))
+        hist_hourly = hourly_points(hist_points, max_hour=hist_max_hour)
+        if not hist_hourly:
+            continue
+
         pair_max_hour = min(current_max_hour, hist_max_hour)
         if pair_max_hour < 2:
             continue
