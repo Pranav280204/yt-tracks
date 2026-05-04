@@ -2135,12 +2135,12 @@ def find_closest_day1_video_match(
                 return int(round(val)), nearest_gap
         return None, None
 
-    def hourly_points(points: list[tuple[float, int]], max_hour: int = 24) -> dict[int, dict]:
+    def hourly_points(points: list[tuple[float, int]], max_hour: int) -> dict[int, dict]:
         out = {}
         if len(points) < 2:
             return out
         prev_end_views = None
-        for h in range(1, max(1, min(24, max_hour)) + 1):
+        for h in range(1, max(1, max_hour) + 1):
             target = h * 3600
             end_views, gap = interp_value(points, target)
             growth = None
@@ -2152,7 +2152,8 @@ def find_closest_day1_video_match(
         return out
 
     current_points = series.get(current_video_id, [])
-    current_hourly = hourly_points(current_points, max_hour=24)
+    current_max_hour = max(0, int(current_since_upload // 3600))
+    current_hourly = hourly_points(current_points, max_hour=current_max_hour)
     if not current_hourly:
         return None
 
@@ -2166,8 +2167,8 @@ def find_closest_day1_video_match(
         if not hist_hourly or not hist_points:
             continue
 
-        hist_max_hour = min(24, max(0, int(hist_points[-1][0] // 3600)))
-        pair_max_hour = hist_max_hour
+        hist_max_hour = max(0, int(hist_points[-1][0] // 3600))
+        pair_max_hour = min(current_max_hour, hist_max_hour)
         if pair_max_hour < 2:
             continue
 
@@ -2223,7 +2224,7 @@ def find_closest_day1_video_match(
     matched_hr = []
     matched_hourly = best["hourly"]
     current_pub_ist = current_pub.astimezone(IST)
-    max_display_hour = int(best.get("pair_max_hour", 24))
+    max_display_hour = int(best.get("pair_max_hour", current_max_hour))
     for h in range(1, max_display_hour + 1):
         c = current_hourly.get(h, {})
         m = matched_hourly.get(h, {})
