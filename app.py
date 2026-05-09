@@ -2135,12 +2135,12 @@ def find_closest_day1_video_match(
                 return int(round(val)), nearest_gap
         return None, None
 
-    def hourly_points(points: list[tuple[float, int]], max_hour: int = 24) -> dict[int, dict]:
+    def hourly_points(points: list[tuple[float, int]], max_hour: int) -> dict[int, dict]:
         out = {}
         if len(points) < 2:
             return out
         prev_end_views = None
-        for h in range(1, max(1, min(24, max_hour)) + 1):
+        for h in range(1, max(1, max_hour) + 1):
             target = h * 3600
             end_views, gap = interp_value(points, target)
             growth = None
@@ -2156,20 +2156,20 @@ def find_closest_day1_video_match(
     if not current_hourly:
         return None
 
-    # Use matched-video coverage as the overlap horizon while only scoring
-    # hours where sampled timelines can provide aligned hourly values.
+    # Use a fixed day-1 horizon (24 hours); score only hours where
+    # both timelines have valid hourly growth values.
 
     best = None
     for hid in historical_ids:
         hist_points = series.get(hid, [])
-        hist_hourly = hourly_points(hist_points)
-        if not hist_hourly or not hist_points:
+        if not hist_points:
             continue
 
-        hist_max_hour = min(24, max(0, int(hist_points[-1][0] // 3600)))
-        pair_max_hour = hist_max_hour
-        if pair_max_hour < 2:
+        hist_hourly = hourly_points(hist_points, max_hour=24)
+        if not hist_hourly:
             continue
+
+        pair_max_hour = 24
 
         score = 0.0
         overlap = 0
@@ -2197,7 +2197,7 @@ def find_closest_day1_video_match(
             score += (growth_similarity_penalty * 2000)
             score += int((c["gap"] + m["gap"]) * 0.1)
 
-        min_required_overlap = max(1, min(3, hist_max_hour - 1))
+        min_required_overlap = 1
         if overlap < min_required_overlap:
             continue
 
