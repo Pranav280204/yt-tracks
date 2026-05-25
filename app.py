@@ -1693,7 +1693,7 @@ def auto_track_scheduler_loop():
                     safe_store(latest_video_id, stats)
             with conn.cursor() as cur:
                 cur.execute(
-                    "UPDATE video_list v SET is_tracking=FALSE "
+                    "UPDATE video_list v SET is_tracking=FALSE, is_deleted=TRUE "
                     "FROM auto_track_jobs j "
                     "WHERE j.added_video_id=v.video_id "
                     "AND j.processed_at + INTERVAL '30 hours' <= %s AND v.is_deleted=FALSE",
@@ -1760,7 +1760,7 @@ def build_video_display(vid: str, exclude_weekends: bool = False, include_day1_m
     conn = db()
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT video_id, name, is_tracking, thumbnail_url, thumbnail_prev_url, thumbnail_changed, thumbnail_changed_at "
+            "SELECT video_id, name, is_tracking, is_deleted, thumbnail_url, thumbnail_prev_url, thumbnail_changed, thumbnail_changed_at "
             "FROM video_list WHERE video_id=%s",
             (vid,)
         )
@@ -1771,11 +1771,17 @@ def build_video_display(vid: str, exclude_weekends: bool = False, include_day1_m
         # compute earliest timestamp to fetch (+2 days margin for interpolation)
         start_utc = (nowu - timedelta(days=_MAX_DISPLAY_DAYS + 2))
 
-        # fetch rows for main video in window (chronological)
-        cur.execute(
-            "SELECT ts_utc, views, likes, comments FROM views WHERE video_id=%s AND ts_utc >= %s ORDER BY ts_utc ASC",
-            (vid, start_utc)
-        )
+        # fetch rows for main video. For removed/non-tracking videos keep full history visible.
+        if bool(vrow.get("is_deleted")):
+            cur.execute(
+                "SELECT ts_utc, views, likes, comments FROM views WHERE video_id=%s ORDER BY ts_utc ASC",
+                (vid,)
+            )
+        else:
+            cur.execute(
+                "SELECT ts_utc, views, likes, comments FROM views WHERE video_id=%s AND ts_utc >= %s ORDER BY ts_utc ASC",
+                (vid, start_utc)
+            )
         all_rows = cur.fetchall()
 
         # fetch reference video rows (for 5-min ratio)
@@ -3684,7 +3690,7 @@ def submit_payment():
 @app.get("/payment-proof/<path:proof_path>")
 @login_required
 def payment_proof(proof_path):
-    if not session.get("admin_ok"):
+    if not session.get("admin_ok") and not bool(g.user and g.user.get("is_admin")):
         abort(403)
 
     safe_base = os.path.abspath("uploads/payment_proofs")
@@ -3735,7 +3741,7 @@ def admin_users():
             return redirect(url_for("admin_users"))
 
         # For all other actions, require unlocked admin session
-        if not session.get("admin_ok"):
+        if not session.get("admin_ok") and not bool(g.user and g.user.get("is_admin")):
             flash("Admin access required.", "danger")
             return render_template("admin_gate.html")
 
@@ -3887,7 +3893,7 @@ def admin_users():
 
     # ---------- GET ----------
     # If admin mode not unlocked yet -> show gate page
-    if not session.get("admin_ok"):
+    if not session.get("admin_ok") and not bool(g.user and g.user.get("is_admin")):
         return render_template("admin_gate.html")
 
     # If unlocked, show full user list
@@ -4537,7 +4543,7 @@ def stop_tracking(video_id):
     # If this is a POST from the UI, optionally require admin password (unless admin already unlocked)
     if request.method == "POST":
         # if admin mode already unlocked in session, skip password check
-        if not session.get("admin_ok"):
+        if not session.get("admin_ok") and not bool(g.user and g.user.get("is_admin")):
             admin_secret = (request.form.get("admin_secret") or "").strip()
             if not ADMIN_CREATE_SECRET:
                 flash("Admin password not configured on server.", "danger")
@@ -4566,7 +4572,7 @@ def stop_tracking(video_id):
 def remove_video(video_id):
     # ✅ Require admin password to remove any video
     admin_secret = (request.form.get("admin_secret") or "").strip()
-    if ADMIN_CREATE_SECRET and admin_secret != ADMIN_CREATE_SECRET:
+    if ADMIN_CREATE_SECRET and not bool(g.user and g.user.get("is_admin")) and admin_secret != ADMIN_CREATE_SECRET:
         flash("Admin password required or incorrect to remove videos.", "danger")
         return redirect(url_for("video_detail", video_id=video_id))
 
@@ -4582,6 +4588,30 @@ def remove_video(video_id):
         flash(f"Removed '{name}' from active tracking. Historical data was preserved.", "success")
     return redirect(url_for("home"))
 
+
+
+@app.post("/remove_videos_bulk")
+@login_required
+def remove_videos_bulk():
+    if not g.user or not bool(g.user.get("is_admin")):
+        flash("Only admin-assigned users can bulk-remove videos.", "danger")
+        return redirect(url_for("home"))
+
+    selected_ids = request.form.getlist("video_ids")
+    video_ids = [vid.strip() for vid in selected_ids if (vid or "").strip()]
+    if not video_ids:
+        flash("Select at least one video to remove.", "warning")
+        return redirect(url_for("home"))
+
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute(
+            "UPDATE video_list SET is_tracking=FALSE, is_deleted=TRUE WHERE video_id = ANY(%s)",
+            (video_ids,)
+        )
+        removed_count = cur.rowcount or 0
+    flash(f"Removed {removed_count} video(s) from active tracking.", "success")
+    return redirect(url_for("home"))
 
 
 @app.get("/export/<video_id>")

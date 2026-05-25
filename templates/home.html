@@ -308,6 +308,13 @@
     <div class="videos-head">
       <h2 class="videos-title">Videos</h2>
       <div class="videos-count"><span id="visibleVideoCount">{{ videos|length }}</span> / {{ videos|length }} visible</div>
+    {% if current_user and current_user.is_admin %}
+      <form id="bulkRemoveForm" method="POST" action="{{ url_for('remove_videos_bulk') }}" onsubmit="return confirm('Remove selected videos from active tracking? Historical data will be preserved.');" class="d-flex align-items-center gap-2">
+        <button class="btn btn-sm btn-outline-danger" type="submit">Bulk Remove Selected</button>
+        <span class="subtle small">Admin only</span>
+      </form>
+    {% endif %}
+
     </div>
 
     {% set tracking_videos = videos | selectattr("is_deleted", "equalto", false) | selectattr("is_tracking", "equalto", true) | list %}
@@ -361,6 +368,11 @@
                   <div class="actions">
                     <a class="btn-ghost" href="{{ url_for('video_stats', video_id=v.video_id) }}">Stats</a>
                     <a class="btn-ghost" href="{{ url_for('video_detail', video_id=v.video_id) }}">Details</a>
+                    {% if current_user and current_user.is_admin and not v.is_deleted %}
+                      <label class="subtle small d-flex align-items-center gap-1">
+                        <input type="checkbox" name="video_ids" value="{{ v.video_id }}" form="bulkRemoveForm"> Select
+                      </label>
+                    {% endif %}
                   </div>
                 </article>
               {% endfor %}
