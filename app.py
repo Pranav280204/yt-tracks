@@ -327,22 +327,45 @@ def get_latest_sample_per_video(video_ids: list[str]) -> dict:
 _db = None
 _db_lock = threading.Lock()
 
+def _new_db_connection():
+    return psycopg.connect(
+        POSTGRES_URL,
+        autocommit=True,
+        row_factory=dict_row,
+        connect_timeout=5,
+        options="-c statement_timeout=15000",
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=10,
+        keepalives_count=5,
+    )
+
+
 def db():
     global _db
     with _db_lock:
-        if _db is None or _db.closed:
-            _db = psycopg.connect(
-                POSTGRES_URL,
-                autocommit=True,
-                row_factory=dict_row,
-                connect_timeout=5,
-                options="-c statement_timeout=15000",
-                keepalives=1,
-                keepalives_idle=30,
-                keepalives_interval=10,
-                keepalives_count=5,
-            )
-        return _db
+        if _db is not None and not _db.closed:
+            return _db
+
+        attempts = 2
+        last_err = None
+        for i in range(attempts):
+            try:
+                _db = _new_db_connection()
+                return _db
+            except psycopg.OperationalError as e:
+                last_err = e
+                log.warning("db() connect attempt %s/%s failed: %s", i + 1, attempts, e)
+                if _db is not None and not _db.closed:
+                    try:
+                        _db.close()
+                    except Exception:
+                        pass
+                _db = None
+                if i + 1 < attempts:
+                    time.sleep(0.5)
+
+        raise last_err
 
 def init_db():
     conn = db()
