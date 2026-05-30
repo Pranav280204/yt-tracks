@@ -126,6 +126,10 @@ def require_admin_secret_from_form(form, redirect_endpoint, **redirect_kwargs):
     return None
 
 CHANNEL_CACHE_TTL = int(os.getenv("CHANNEL_CACHE_TTL", "50"))  # seconds; < sampler interval
+
+HOME_VIDEO_PAGE_SIZE = int(os.getenv("HOME_VIDEO_PAGE_SIZE", "12"))
+HOME_VIDEO_PAGE_SIZE = max(1, min(HOME_VIDEO_PAGE_SIZE, 50))
+HOME_VIDEO_STATUSES = {"tracking", "paused", "deleted"}
 if not POSTGRES_URL:
     log.warning("DATABASE_URL not set.")
 
@@ -3958,18 +3962,98 @@ def landing():
         return redirect(url_for("home"))
     return render_template("landing.html")
 
+def _home_status_sql(status: str) -> str:
+    if status == "tracking":
+        return "is_deleted=FALSE AND is_tracking=TRUE"
+    if status == "paused":
+        return "is_deleted=FALSE AND is_tracking=FALSE"
+    if status == "deleted":
+        return "is_deleted=TRUE"
+    raise ValueError("unknown home video status")
+
+
+def _format_home_video_cards(video_rows: list[dict]) -> list[dict]:
+    video_ids = [v["video_id"] for v in video_rows]
+    ch_map = fetch_channel_id_for_videos(video_ids) if YOUTUBE and video_ids else {}
+    unique_chs = sorted({ch for ch in ch_map.values() if ch})
+    channel_totals = get_latest_channel_totals_for(unique_chs) if unique_chs else {}
+    latest_samples = get_latest_sample_per_video(video_ids) if video_ids else {}
+
+    cards = []
+    for v in video_rows:
+        vid = v["video_id"]
+        thumb = v.get("thumbnail_url") or f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
+        name = v["name"]
+        short_title = name if len(name) <= 60 else name[:57] + "..."
+        channel_id = ch_map.get(vid)
+        channel_total = channel_totals.get(channel_id) if channel_id else None
+        latest = latest_samples.get(vid)
+        latest_views = latest["views"] if latest else None
+        latest_ts = latest["ts_utc"] if latest else None
+        latest_ts_ist = latest_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if latest_ts else None
+        cards.append({
+            "video_id": vid,
+            "name": name,
+            "short_title": short_title,
+            "thumbnail": thumb,
+            "is_tracking": bool(v["is_tracking"]),
+            "is_deleted": bool(v["is_deleted"]),
+            "channel_total_cached": channel_total,
+            "latest_views": latest_views,
+            "latest_ts": latest_ts,
+            "latest_ts_ist": latest_ts_ist
+        })
+    return cards
+
+
+def _fetch_home_video_section(status: str, offset: int = 0, limit: int = HOME_VIDEO_PAGE_SIZE) -> list[dict]:
+    if status not in HOME_VIDEO_STATUSES:
+        raise ValueError("unknown home video status")
+    offset = max(0, int(offset or 0))
+    limit = max(1, min(int(limit or HOME_VIDEO_PAGE_SIZE), 50))
+    conn = db()
+    where_sql = _home_status_sql(status)
+    with conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT video_id, name, is_tracking, is_deleted, thumbnail_url
+            FROM video_list
+            WHERE {where_sql}
+            ORDER BY name
+            LIMIT %s OFFSET %s
+            """,
+            (limit, offset)
+        )
+        video_rows = cur.fetchall()
+    return _format_home_video_cards(video_rows)
+
+
+def _home_video_counts() -> dict[str, int]:
+    conn = db()
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+              COUNT(*) FILTER (WHERE is_deleted=FALSE AND is_tracking=TRUE) AS tracking,
+              COUNT(*) FILTER (WHERE is_deleted=FALSE AND is_tracking=FALSE) AS paused,
+              COUNT(*) FILTER (WHERE is_deleted=TRUE) AS deleted
+            FROM video_list
+            """
+        )
+        row = cur.fetchone() or {}
+    return {
+        "tracking": int(row.get("tracking") or 0),
+        "paused": int(row.get("paused") or 0),
+        "deleted": int(row.get("deleted") or 0),
+    }
+
+
 @app.get("/dashboard")
 @login_required
 def home():
     t0 = time.time()
     conn = db()
     with conn.cursor() as cur:
-        cur.execute(
-            "SELECT video_id, name, is_tracking, is_deleted "
-            "FROM video_list "
-            "ORDER BY is_deleted ASC, name"
-        )
-        videos = cur.fetchall()
         cur.execute(
             "SELECT id, channel_input, channel_id, run_time_utc, status, added_video_id, is_active "
             "FROM auto_track_jobs ORDER BY created_at DESC LIMIT 10"
@@ -3980,68 +4064,46 @@ def home():
         j["channel_name"] = auto_channel_names.get(j.get("channel_id"))
         rt = j.get("run_time_utc")
         j["run_time_ist"] = rt.astimezone(IST).strftime("%Y-%m-%d %H:%M") if rt else "-"
-    t_db_videos = time.time()
 
-    video_ids = [v["video_id"] for v in videos]
-    vids = []
-
-    # 1) fetch channel ids (may use in-memory API cache)
-    ch_map = fetch_channel_id_for_videos(video_ids) if YOUTUBE and video_ids else {}
-    t_ch_map = time.time()
-
-    # 2) batch-read latest channel totals from DB (fast)
-    unique_chs = sorted({ch for ch in ch_map.values() if ch})
-    channel_totals = get_latest_channel_totals_for(unique_chs) if unique_chs else {}
-    t_ch_totals = time.time()
-
-    # 3) batch-read latest view sample per video
-    latest_samples = get_latest_sample_per_video(video_ids) if video_ids else {}
-    t_latest_samples = time.time()
-
-    for v in videos:
-        vid = v["video_id"]
-        thumb = f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg"
-        short_title = v["name"] if len(v["name"]) <= 60 else v["name"][:57] + "..."
-        channel_id = ch_map.get(vid)
-        channel_total = channel_totals.get(channel_id) if channel_id else None
-
-        latest = latest_samples.get(vid)
-        latest_views = latest["views"] if latest else None
-        latest_ts = latest["ts_utc"] if latest else None
-        latest_ts_ist = latest_ts.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S") if latest_ts else None
-
-        vids.append({
-            "video_id": vid,
-            "name": v["name"],
-            "short_title": short_title,
-            "thumbnail": thumb,
-            "is_tracking": bool(v["is_tracking"]),
-            "is_deleted": bool(v["is_deleted"]),
-            "channel_total_cached": channel_total,
-            "latest_views": latest_views,
-            "latest_ts": latest_ts,
-            "latest_ts_ist": latest_ts_ist
-        })
-
+    counts = _home_video_counts()
+    videos_by_section = {
+        status: _fetch_home_video_section(status, 0, HOME_VIDEO_PAGE_SIZE)
+        for status in ("tracking", "paused", "deleted")
+    }
     t_end = time.time()
-    # Optional timing logs to help you measure improvements
-    log.info("home timings: db_videos=%.3fs ch_map=%.3fs ch_totals=%.3fs latest_samples=%.3fs total=%.3fs",
-             t_db_videos - t0, t_ch_map - t_db_videos, t_ch_totals - t_ch_map, t_latest_samples - t_ch_totals, t_end - t0)
+    total_videos = sum(counts.values())
+    initial_loaded = sum(len(v) for v in videos_by_section.values())
+    log.info(
+        "home timings: sections=%s loaded=%s total=%s total_time=%.3fs",
+        len(videos_by_section), initial_loaded, total_videos, t_end - t0
+    )
 
-    return render_template("home.html", videos=vids, auto_jobs=auto_jobs)
+    return render_template(
+        "home.html",
+        videos_by_section=videos_by_section,
+        video_counts=counts,
+        total_videos=total_videos,
+        initial_loaded=initial_loaded,
+        page_size=HOME_VIDEO_PAGE_SIZE,
+        auto_jobs=auto_jobs
+    )
 
 
 @app.get("/home/json")
 @login_required
 def home_json():
-    conn = db()
-    with conn.cursor() as cur:
-        cur.execute("SELECT video_id FROM video_list ORDER BY is_deleted ASC, name")
-        video_rows = cur.fetchall()
+    ids_param = (request.args.get("ids") or "").strip()
+    video_ids = []
+    seen = set()
+    for raw in ids_param.split(","):
+        vid = raw.strip()
+        if vid and vid not in seen:
+            seen.add(vid)
+            video_ids.append(vid)
+        if len(video_ids) >= 200:
+            break
 
-    video_ids = [v["video_id"] for v in video_rows]
     latest_samples = get_latest_sample_per_video(video_ids) if video_ids else {}
-
     payload = []
     for vid in video_ids:
         latest = latest_samples.get(vid)
@@ -4055,6 +4117,37 @@ def home_json():
         })
 
     return jsonify({"videos": payload})
+
+
+@app.get("/home/videos")
+@login_required
+def home_videos():
+    status = (request.args.get("status") or "").strip().lower()
+    if status not in HOME_VIDEO_STATUSES:
+        return jsonify({"error": "invalid status"}), 400
+    try:
+        offset = max(0, int(request.args.get("offset") or 0))
+    except ValueError:
+        offset = 0
+    try:
+        limit = int(request.args.get("limit") or HOME_VIDEO_PAGE_SIZE)
+    except ValueError:
+        limit = HOME_VIDEO_PAGE_SIZE
+    limit = max(1, min(limit, 50))
+
+    videos = _fetch_home_video_section(status, offset, limit)
+    total = _home_video_counts().get(status, 0)
+    next_offset = offset + len(videos)
+    html = render_template("_home_video_cards.html", videos=videos)
+    return jsonify({
+        "status": status,
+        "html": html,
+        "count": len(videos),
+        "next_offset": next_offset,
+        "total": total,
+        "has_more": next_offset < total
+    })
+
 
 @app.get("/mrbeast_sum")
 @login_required
